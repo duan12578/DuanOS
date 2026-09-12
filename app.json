@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "DuanOS", "slug": "duanos", "version": "0.1.1",
+    "orientation": "portrait", "userInterfaceStyle": "light", "scheme": "duanos",
+    "ios": { "supportsTablet": false, "bundleIdentifier": "com.duan12578.duanos" },
+    "android": { "package": "com.duan12578.duanos" },
+    "plugins": ["expo-notifications"],
+    "web": { "bundler": "metro" }
+  }
+}

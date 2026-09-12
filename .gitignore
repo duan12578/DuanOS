@@ -141,3 +141,14 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Expo and signing
+.expo/
+ios/
+android/
+*.p8
+*.p12
+*.mobileprovision
+*.keystore
+playwright-report/
+test-results/
