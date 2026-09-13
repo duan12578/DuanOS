@@ -1,6 +1,20 @@
-# DuanOS v0.1.1
+# DuanOS v0.2.0
 
-基于 Expo SDK 55、React Native 0.83 与 TypeScript 的个人 iPhone 工作系统。
+基于 Expo SDK 55、React Native 0.83、Cloudflare Pages Functions 与 TypeScript 的个人 iPhone 工作系统。
+
+v0.2.0 增加第一条真实云端工作流：本地优先记账 → Google Sheets《个人记账｜口述版》的「记账流水」→ Gmail 成功回执。未登录 Google 时完整保留 v0.1.1 的本地模式。
+
+## Cloudflare Pages
+
+- 构建命令：`npm run build:cloudflare`
+- 输出目录：`dist`
+- Functions：`functions/api/health.ts`、`functions/api/auth/*`、`functions/api/ledger.ts`
+- KV binding：`DUANOS_KV`
+- Secrets/Variables：参见 `.dev.vars.example`，真实值只能在 Cloudflare 配置
+
+Cloudflare 根路径构建不设置子目录。GitHub Pages workflow 独立使用 `/DuanOS` 路径转换，因此两个部署可以共存。
+
+Google OAuth 回调地址必须配置为 Cloudflare 正式域名的 `/api/auth/callback`。所需 scope 仅包括身份、Drive 元数据、Sheets 写入与 Gmail 发送，不含 Calendar。
 
 ## 当前能力
 

@@ -7,6 +7,8 @@ import * as Crypto from 'expo-crypto';
 import { beijingDate, decodeEntries, kinds, labels, makeEntry, recognize, totals, validate } from './src/domain';
 import type { Draft, Entry, Kind } from './src/domain';
 import { cancel, schedule } from './src/notifications';
+import { fetchCloudStatus, syncLedgerEntry, type CloudStatus } from './src/cloud';
+import { pendingSyncCount, updateSync } from './src/sync';
 
 const KEY = 'duanos:entries:v1';
 const C = { bg: '#F5F6FA', ink: '#19243C', muted: '#6F788B', accent: '#5555D9', pale: '#EEEEFF', line: '#E7EAF1', green: '#247B68' };
@@ -35,8 +37,25 @@ function DuanOS() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<Kind | null>(null);
+  const [cloud, setCloud] = useState<CloudStatus>({ ok: false, authenticated: false, email: null });
   useEffect(() => { AsyncStorage.getItem(KEY).then(decodeEntries).then(setEntries).then(() => setLoaded(true)).catch(() => setLoadError('无法读取本地记录。为保护数据，已暂停写入，请重启应用重试。')); }, []);
+  useEffect(() => { if (Platform.OS === 'web') fetchCloudStatus().then(setCloud).catch(() => setCloud({ ok: false, authenticated: false, email: null })); }, []);
   const persist = async (next: Entry[]) => { await AsyncStorage.setItem(KEY, JSON.stringify(next)); setEntries(next); };
+  const syncOne = async (entry: Entry, current = entries) => {
+    if (entry.kind !== 'ledger' || entry.syncState === 'synced') return;
+    const syncing = updateSync(current, entry.id, 'syncing');
+    try { await persist(syncing); }
+    catch { setMessage('无法保存同步状态，本地记录保持待同步，请稍后重试'); return; }
+    try {
+      const result = await syncLedgerEntry({ ...entry, syncState: 'syncing' });
+      const state = result.receiptSent ? 'synced' as const : 'error' as const;
+      await persist(updateSync(syncing, entry.id, state, result.receiptSent ? undefined : '表格已同步，回执邮件待重试'));
+      setMessage(result.receiptSent ? '记账已同步，Gmail 回执已发送' : '表格已同步，Gmail 回执发送失败，可安全重试');
+    } catch {
+      await persist(updateSync(syncing, entry.id, 'error', '同步失败，本地记录已保留'));
+      setMessage('云同步失败，本地记录已保留，可在工作台重试');
+    }
+  };
   const start = (kind?: Kind) => { setRaw(kind ? examples[kind] : ''); setDraft(null); setError(''); setOpen(true); };
   const close = () => { if (!lock.current) setOpen(false); };
   const save = async () => {
@@ -50,6 +69,7 @@ function DuanOS() {
       const next = [entry, ...entries];
       await persist(next);
       let notice = `${labels[entry.kind]}已保存到本机`;
+      let cloudAttempted = false;
       if (entry.kind === 'reminder') {
         try {
           const ok = await schedule(entry.id, entry.text, entry.dueAt!);
@@ -59,7 +79,12 @@ function DuanOS() {
           } else notice += '；通知未开启或当前平台不支持，请在工作台重试通知';
         } catch { notice += '；通知安排失败，请在工作台重试通知'; }
       }
-      setMessage(notice); setOpen(false); setDraft(null); setRaw('');
+      if (entry.kind === 'ledger' && cloud.ok && cloud.authenticated) {
+        cloudAttempted = true;
+        await syncOne(entry, next);
+      }
+      if (!cloudAttempted) setMessage(notice);
+      setOpen(false); setDraft(null); setRaw('');
     } catch { setError('保存失败，内容仍保留在这里，请重试。'); }
     finally { lock.current = false; setBusy(false); }
   };
@@ -87,20 +112,24 @@ function DuanOS() {
   };
   const today = beijingDate(); const summary = totals(entries, today); const all = totals(entries);
   const pending = entries.filter(e => (e.kind === 'todo' || e.kind === 'reminder') && !e.done);
+  const unsynced = pendingSyncCount(entries);
+  const cloudLabel = unsynced ? `${unsynced} 条待同步` : cloud.ok && cloud.authenticated ? '云端已连接' : '本地模式';
   const patch = (value: Partial<Draft>) => setDraft(d => d ? { ...d, ...value } : d);
   const renderEntry = (e: Entry) => <View key={e.id} style={s.entry}>
     <View style={[s.iconBox, { backgroundColor: e.kind === 'review' ? '#FFF3E6' : C.pale }]}><Ionicons name={icons[e.kind]} size={22} color={C.accent} /></View>
     <View style={{ flex: 1, gap: 6 }}><Text style={[s.body, e.done && { textDecorationLine: 'line-through', color: C.muted }]}>{e.text}</Text><Text style={s.caption}>{labels[e.kind]} · {e.date}{e.account ? ` · ${e.account}` : ''}</Text>
       {e.kind === 'reminder' && <Text style={s.caption}>{timeLabel(e.dueAt!)} 北京时间 · {e.done ? '已完成' : e.notificationState === 'scheduled' ? '已安排通知' : '通知未安排'}</Text>}
+      {e.kind === 'ledger' && <Text style={s.caption}>{e.syncState === 'synced' ? '已同步到 Google Sheets' : e.syncState === 'syncing' ? '正在同步' : e.syncState === 'error' ? `同步失败${e.syncError ? ` · ${e.syncError}` : ''}` : '待同步'}</Text>}
       <View style={s.row}>{(e.kind === 'todo' || e.kind === 'reminder') && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void mutate(e, 'complete')} style={s.smallAction}><Text style={s.link}>{e.done ? '恢复待办' : '标记完成'}</Text></Pressable>}
       {e.kind === 'reminder' && !e.done && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void mutate(e, 'retry')} style={s.smallAction}><Text style={s.link}>重试通知</Text></Pressable>}
+      {e.kind === 'ledger' && e.syncState !== 'synced' && cloud.authenticated && <Pressable accessibilityRole="button" disabled={busy || e.syncState === 'syncing'} onPress={() => void syncOne(e)} style={s.smallAction}><Text style={s.link}>重试同步</Text></Pressable>}
       <Pressable accessibilityRole="button" accessibilityLabel={`删除记录：${e.text}`} disabled={busy} onPress={() => remove(e)} style={s.smallAction}><Text style={s.caption}>删除</Text></Pressable></View>
     </View>{e.kind === 'ledger' && <Text style={[s.money, e.direction === 'income' && { color: C.green }]}>{e.direction === 'income' ? '+' : '−'}{cash(e.amountCents!)}</Text>}
   </View>;
   return <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
-    <View style={s.top}><View style={s.row}><View style={s.logo}><Text style={s.logoText}>D</Text></View><Text style={s.brand}>DuanOS</Text></View><View style={s.badge}><View style={s.dot} /><Text style={s.caption}>本地模式</Text></View></View>
+    <View style={s.top}><View style={s.row}><View style={s.logo}><Text style={s.logoText}>D</Text></View><Text style={s.brand}>DuanOS</Text></View><View style={s.badge}><View style={s.dot} /><Text style={s.caption}>{cloudLabel}</Text></View></View>
     <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-      <Text style={s.eyebrow}>PERSONAL WORKSPACE / V0.1.1</Text>
+      <Text style={s.eyebrow}>PERSONAL WORKSPACE / V0.2.0</Text>
       <Text style={s.title}>{tab === '首页' ? '让生活，有条理。' : tab === '工作台' ? '把想法，变成行动。' : tab === 'AI' ? '一句话，开始整理。' : '每一步，都有记录。'}</Text>
       <Text style={s.subtitle}>{tab === '首页' ? `${today} · 只专注当下重要的事` : tab === '工作台' ? '记账、待办、提醒与复盘，集中管理' : tab === 'AI' ? '本地意图识别已就绪，无需 API Key' : '来自你的真实记录，不预填示例数据'}</Text>
       {(message || loadError) ? <Pressable accessibilityRole="button" onPress={() => setMessage('')} style={s.notice}><Text accessibilityLiveRegion="polite" style={s.body}>{loadError || message}</Text></Pressable> : null}
@@ -119,12 +148,12 @@ function DuanOS() {
       {tab === 'AI' && <>
         <View style={[s.card, s.aiCard]}><View style={[s.iconBox, { width: 62, height: 62 }]}><Ionicons name="sparkles-outline" size={30} color={C.accent} /></View><Text style={s.sectionTitle}>你的统一输入助手</Text><Text style={[s.subtitle, { textAlign: 'center' }]}>输入一句话，识别后核对保存。\n可使用 iPhone 键盘自带的语音听写。</Text><Button title="输入一条记录" onPress={() => start()} disabled={!loaded} /></View>
         <Text style={s.sectionTitle}>试着这样说</Text>{kinds.map(k => <Pressable accessibilityRole="button" disabled={!loaded} key={k} onPress={() => start(k)} style={s.example}><Ionicons name={icons[k]} size={21} color={C.accent} /><View style={{ flex: 1, gap: 5 }}><Text style={s.label}>{labels[k]}</Text><Text style={s.body}>{examples[k]}</Text></View><Ionicons name="arrow-up-outline" size={19} color={C.muted} /></Pressable>)}
-        <View style={s.notice}><Text style={s.label}>连接状态</Text><Text style={s.subtitle}>当前使用本地规则识别，尚未接入大模型。Google 表格、Todoist、日历与 Notion 均未连接，不会向这些服务写入。</Text></View>
+        <View style={s.notice}><Text style={s.label}>Google 连接</Text><Text style={s.subtitle}>{cloud.authenticated ? `已授权 ${cloud.email ?? '当前账户'}，记账可同步到 Google Sheets 并发送 Gmail 回执。` : '当前使用本地规则识别。未连接时仍可正常本地使用；连接后只同步记账，其他记录保持本地。'}</Text>{Platform.OS === 'web' && !cloud.authenticated && <Button title="连接 Google" onPress={() => { window.location.href = '/api/auth/login'; }} />}</View>
       </>}
       {tab === '数据' && <>
         <View style={s.stats}><View style={[s.card, s.stat]}><Text style={s.caption}>累计支出</Text><Text style={s.statNumber}>¥{cash(all.expense)}</Text></View><View style={[s.card, s.stat]}><Text style={s.caption}>累计收入</Text><Text style={[s.statNumber, { color: C.green }]}>¥{cash(all.income)}</Text></View></View>
         <View style={[s.card, { padding: 22, gap: 20 }]}><Text style={s.sectionTitle}>记录分布</Text>{kinds.map(k => { const count = entries.filter(e => e.kind === k).length; return <View key={k} style={{ gap: 9 }}><View style={s.rowBetween}><Text style={s.body}>{labels[k]}</Text><Text style={s.caption}>{count} 条</Text></View><View style={s.track}><View style={[s.fill, { width: `${entries.length ? count / entries.length * 100 : 0}%` }]} /></View></View>; })}</View>
-        <View style={[s.card, { padding: 22, gap: 14 }]}><Text style={s.sectionTitle}>数据与隐私</Text><Text style={s.subtitle}>记录仅保存在当前设备，卸载应用或清除浏览器数据可能丢失。尚未提供云端备份；本机存储未额外加密，请勿录入密码或密钥。</Text><Text style={s.caption}>金额汇总基于本地流水，不代表银行账户余额。</Text><Text style={s.caption}>DuanOS v0.1.1 · Asia/Shanghai</Text></View>
+        <View style={[s.card, { padding: 22, gap: 14 }]}><Text style={s.sectionTitle}>数据与隐私</Text><Text style={s.subtitle}>所有记录先保存在当前设备。连接 Google 后，只有记账会同步到指定表格；网络失败不会删除本地记录。</Text><Text style={s.caption}>金额汇总基于本地流水，不代表银行账户余额。</Text><Text style={s.caption}>DuanOS v0.2.0 · Asia/Shanghai</Text></View>
       </>}
       <Text style={s.footer}>少一点切换，多一点专注。</Text>
     </ScrollView>
