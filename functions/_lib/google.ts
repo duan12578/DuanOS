@@ -31,16 +31,11 @@ export async function refreshSession(env: Env, sessionId: string, session: Store
 }
 
 export async function locateLedgerSpreadsheet(env: Env, accessToken: string): Promise<string> {
-  const cached = await env.DUANOS_KV.get('config:ledgerSpreadsheetId');
-  if (cached) return cached;
-  const q = "name = '个人记账｜口述版' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false";
-  const drive = await googleJson<{ files: Array<{ id: string; name: string }> }>(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&spaces=drive&pageSize=10`, { method: 'GET' }, accessToken);
-  const exact = drive.files.filter(file => file.name === '个人记账｜口述版');
-  if (exact.length !== 1) throw new Error(exact.length ? 'MULTIPLE_SPREADSHEETS' : 'SPREADSHEET_NOT_FOUND');
-  const meta = await googleJson<{ sheets: Array<{ properties: { title: string } }> }>(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(exact[0].id)}?fields=sheets.properties.title`, { method: 'GET' }, accessToken);
+  const spreadsheetId = env.GOOGLE_SPREADSHEET_ID.trim();
+  if (!spreadsheetId) throw new Error('SPREADSHEET_ID_NOT_CONFIGURED');
+  const meta = await googleJson<{ sheets: Array<{ properties: { title: string } }> }>(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties.title`, { method: 'GET' }, accessToken);
   if (!meta.sheets.some(sheet => sheet.properties.title === '记账流水')) throw new Error('LEDGER_SHEET_NOT_FOUND');
-  await env.DUANOS_KV.put('config:ledgerSpreadsheetId', exact[0].id);
-  return exact[0].id;
+  return spreadsheetId;
 }
 
 export async function appendLedger(accessToken: string, spreadsheetId: string, payload: LedgerPayload): Promise<void> {

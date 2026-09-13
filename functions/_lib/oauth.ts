@@ -3,7 +3,6 @@ import { base64url, randomToken } from './security.ts';
 export const GOOGLE_SCOPES = [
   'openid',
   'email',
-  'https://www.googleapis.com/auth/drive.metadata.readonly',
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/gmail.send',
 ];

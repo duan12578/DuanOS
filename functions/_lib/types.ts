@@ -9,6 +9,7 @@ export interface Env {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_REDIRECT_URI: string;
+  GOOGLE_SPREADSHEET_ID: string;
   ALLOWED_GOOGLE_EMAIL: string;
   SESSION_ENCRYPTION_KEY: string;
 }
