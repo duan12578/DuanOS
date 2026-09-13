@@ -31,7 +31,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Export Expo web app
+        env:
+          EXPO_BASE_URL: /DuanOS
+          EXPO_PUBLIC_BASE_URL: /DuanOS
         run: npx expo export --platform web
+
+      - name: Fix project subpath asset URLs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for p in Path("dist").rglob("*"):
+              if p.is_file() and p.suffix in {".html", ".js", ".css", ".json"}:
+                  s = p.read_text()
+                  s = s.replace("/_expo/", "/DuanOS/_expo/").replace("/assets/", "/DuanOS/assets/")
+                  p.write_text(s)
+          PY
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact
