@@ -6,27 +6,10 @@ export interface KVNamespaceLike {
 
 export interface Env {
   DUANOS_KV: KVNamespaceLike;
-  GOOGLE_CLIENT_ID: string;
-  GOOGLE_CLIENT_SECRET: string;
-  GOOGLE_REDIRECT_URI: string;
-  GOOGLE_SPREADSHEET_ID: string;
-  ALLOWED_GOOGLE_EMAIL: string;
-  SESSION_ENCRYPTION_KEY: string;
+  APPS_SCRIPT_WEB_APP_URL: string;
+  APPS_SCRIPT_SHARED_SECRET: string;
+  DUANOS_OWNER_PASSWORD_HASH: string;
 }
 
-export interface GoogleTokens {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-  token_type?: string;
-  scope?: string;
-}
-
-export interface StoredSession {
-  email: string;
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number;
-}
-
+export interface StoredSession { createdAt: number; expiresAt: number; }
 export type PagesHandler = (context: { request: Request; env: Env }) => Promise<Response>;

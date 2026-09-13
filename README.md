@@ -2,19 +2,19 @@
 
 基于 Expo SDK 55、React Native 0.83、Cloudflare Pages Functions 与 TypeScript 的个人 iPhone 工作系统。
 
-v0.2.0 增加第一条真实云端工作流：本地优先记账 → Google Sheets《个人记账｜口述版》的「记账流水」→ Gmail 成功回执。未登录 Google 时完整保留 v0.1.1 的本地模式。
+v0.2.0 增加第一条云端工作流：本地优先记账 → Cloudflare Pages Functions → 私有 Google Apps Script 桥接 → Google Sheets《个人记账｜口述版》的「记账流水」→ Gmail 成功回执。未登录 Owner Session 时完整保留 v0.1.1 的本地模式。
 
 ## Cloudflare Pages
 
 - 构建命令：`npm run build:cloudflare`
 - 输出目录：`dist`
-- Functions：`functions/api/health.ts`、`functions/api/auth/*`、`functions/api/ledger.ts`
+- Functions：`functions/api/health.ts`、Owner 登录/退出、`functions/api/ledger.ts`
 - KV binding：`DUANOS_KV`
 - Secrets/Variables：参见 `.dev.vars.example`，真实值只能在 Cloudflare 配置
 
 Cloudflare 根路径构建不设置子目录。GitHub Pages workflow 独立使用 `/DuanOS` 路径转换，因此两个部署可以共存。
 
-Google OAuth 回调地址必须配置为 Cloudflare 正式域名的 `/api/auth/callback`。所需 scope 仅包括身份、Drive 元数据、Sheets 写入与 Gmail 发送，不含 Calendar。
+Cloudflare 环境只配置 `APPS_SCRIPT_WEB_APP_URL`、`APPS_SCRIPT_SHARED_SECRET`、`DUANOS_OWNER_PASSWORD_HASH`；目标表格 ID、回执邮箱和桥接 Secret 放在 Apps Script Script Properties。仓库示例均为空值。人工步骤见 [Apps Script 部署清单](docs/APPS-SCRIPT-DEPLOY.md)。
 
 ## 当前能力
 
@@ -69,7 +69,7 @@ npm run export    # iOS / Android / Web JavaScript 与资源打包
 
 ## 安全配置
 
-无需任何 API Key 即可运行本版。`.env` 与 `.env.*` 已加入 `.gitignore`，仅提交空值 `.env.example`。
+无需任何 API Key 即可使用本地模式。`.env`、`.dev.vars` 与其本地变体必须忽略，只提交空值示例。
 
 如将来需要配置，复制 `.env.example` 为 `.env`。`EXPO_PUBLIC_API_BASE_URL` 只是未来后端地址的预留，本版不读取或调用。**所有 `EXPO_PUBLIC_*` 都会进入客户端包，不得放秘密**。OpenAI/DeepSeek 等提供商密钥只放未来服务端的 `.env`，不要放客户端、`app.json`、代码、截图或 GitHub。
 
@@ -77,7 +77,7 @@ npm run export    # iOS / Android / Web JavaScript 与资源打包
 
 ## 本版边界
 
-- 本地规则识别，不是大模型聊天或多智能体；Google Sheets、Todoist、Google Calendar、Gmail、Notion 未连接。
+- 本地规则识别，不是大模型聊天或多智能体；Apps Script 尚未人工部署，Todoist、Google Calendar、Notion 不在本版范围。
 - 不包含转账、还款、退款关联、循环提醒、批量意图、跨设备同步、导入导出或历史编辑。相关资金操作会阻止保存，避免错误影响收支。
 - 待办里的“明天”等保留在正文，本版不解析待办到期日期或优先级。
 - 记录仅在当前设备。卸载、清除浏览器数据可能丢失；存储未额外加密。收支汇总不是银行余额。

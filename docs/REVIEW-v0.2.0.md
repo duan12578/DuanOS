@@ -1,31 +1,27 @@
-# DuanOS v0.2.0 安全与可靠性 Review
+# DuanOS v0.2.0 安全 Review
 
-## 范围
+## 架构
 
-本版只增加 Google Sheets 记账同步和 Gmail 回执。Todoist、Calendar、Notion 与大模型 API 不在本版范围。
+`DuanOS Web → 同域 Cloudflare Pages Functions → HMAC 签名 → 私有 Apps Script Web App → Google Sheets / Gmail`
 
-## 数据流
-
-1. 记账记录先以稳定 ID 写入 AsyncStorage。
-2. 登录 Google 且后端健康时，前端把同一 ID 作为幂等键提交到同域 `/api/ledger`。
-3. 后端从加密的服务端 Session 读取 Google 凭证，按完全匹配标题查找表格并确认 `记账流水` 工作表。
-4. 后端按九列顺序追加一行，先记录 `sheet_written`，之后发送 Gmail 回执。
-5. 邮件失败时重试只重发邮件，不再次追加表格行。
+所有记账仍先写入 AsyncStorage。Owner Session 登录后，Cloudflare 才接受 `/api/ledger`；Apps Script 以脚本所有者身份操作固定账本和回执邮箱。
 
 ## Review 结论
 
-- 秘密泄漏：仓库只包含空值示例；OAuth secret、允许邮箱和加密密钥必须配置为 Cloudflare Secrets/Variables。前端不读取长期凭证。
-- OAuth CSRF：Authorization Code Flow 使用随机 state、十分钟有效期、加密 HttpOnly Cookie 和 PKCE。回调只重定向到当前同域根路径，不接受用户提供的跳转地址。
-- Cookie：Session ID 使用 Secure、HttpOnly、SameSite=Lax；Google token 加密后只存 KV。
-- CORS/CSRF：写入 API 要求 `Origin` 与请求 origin 完全一致，不返回跨域允许头。
-- 所有者限制：OAuth userinfo 的已验证邮箱必须与 `ALLOWED_GOOGLE_EMAIL` 完全一致。
-- 输入：后端重新校验 ID、日期、类型、正数金额、账户、内容与长度；退款、转账、还款不属于合法类型。
-- 幂等与异常：KV 状态区分 processing、sheet_written 和 complete。表格确认后再发邮件；失败前不会标记完成。
-- 本地保护：所有云操作发生在本地持久化之后；失败只更新同步状态，不删除或覆盖业务字段。
-- 日志：响应只返回固定错误码，代码不记录 token、OAuth code、请求正文或用户邮箱。
+- Google OAuth：Client ID、Client Secret、redirect URI、state/PKCE、scope、refresh/access token 与 Drive/Sheets/Gmail REST OAuth 代码均已删除。
+- 长期秘密：前端与仓库均不含长期秘密。Cloudflare 只读取 `APPS_SCRIPT_WEB_APP_URL`、`APPS_SCRIPT_SHARED_SECRET`、`DUANOS_OWNER_PASSWORD_HASH`；Apps Script 只从 Script Properties 读取 `SPREADSHEET_ID`、`RECEIPT_EMAIL`、`DUANOS_BRIDGE_SECRET`。
+- Owner 密码：Cloudflare 只保存 `pbkdf2-sha256$iterations$salt$hash`，最低 600,000 次 PBKDF2-SHA256、独立至少 16-byte salt、32-byte 派生值，并使用 constant-time 比较。不保存或记录明文。
+- Session：登录成功后旋转既有 Session，使用 32-byte 随机 ID；KV 只存创建/过期时间；Cookie 为 `__Host-`、Secure、HttpOnly、SameSite=Lax、Path=/，有效期 30 天。退出同时删除服务端 Session。
+- 暴力破解：按 Cloudflare IP 与 User-Agent 的 SHA-256 摘要计数，15 分钟内五次失败即临时锁定；响应不提示密码接近程度，也不保存原始 IP。
+- CSRF/CORS：登录、退出和记账 POST 均要求 `Origin` 与请求 URL 同源；未设置跨域允许头。
+- HMAC：签名覆盖 timestamp、稳定 requestId、action 和固定字段顺序的完整 payload；Apps Script constant-time 验签并拒绝超过五分钟的请求、未知 action 和无效 payload。错误响应不包含 Secret 或请求正文。
+- 幂等：Cloudflare KV 与 Apps Script Script Properties 双层记录 `sheet_written` / `complete`。写表确认后才发邮件；邮件失败只重试 `ledger.receipt`。Apps Script 使用脚本锁保护同一阶段，Cloudflare 超时后再次调用 append 也不会新增第二行。
+- 本地保护：同步发生在本地持久化之后；错误只修改同步状态，不删除或覆盖本地业务字段。
+- 日志：Cloudflare 不记录口令、Hash、Cookie、共享 Secret 或 payload。Apps Script 只记录固定内部错误消息，不记录签名、正文或 Script Properties。
 
 ## 已知限制
 
-- Cloudflare KV 不是强一致数据库。单一所有者的顺序重试已覆盖；极端的跨区域、同一毫秒并发请求仍存在理论竞争窗口。若未来开放多用户或批量并发，应将幂等锁迁移到 Durable Object 或 D1 唯一约束。
-- 本地记录仍未加密，清除 Safari 网站数据会删除本地记录。
-- 首次正式上线必须人工完成 Google OAuth、Cloudflare KV 与 Secrets 配置，并进行真实账本验收。
+- Cloudflare KV 最终一致，登录限速在极端跨区域并发下不是严格全局计数；本系统仅限单一所有者。若威胁模型扩大，应迁移限速和入口幂等锁到 Durable Object。
+- Apps Script Script Properties 有配额，不适合无限增长。未来需要保留清理策略，但在不能证明远端重试窗口结束前不得删除幂等状态。
+- Apps Script Web App 的部署与 Script Properties 尚未实际配置，本轮不进行真实联调。Web App 为了接受 Cloudflare 服务端请求需要允许匿名 HTTP 访问，因此 URL 不是认证边界；安全性依赖高熵共享 Secret、HMAC 验签、时间窗和幂等校验。
+- 本地记录未额外加密；清除 Safari 网站数据仍会删除本地记录。

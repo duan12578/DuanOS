@@ -7,7 +7,7 @@ import * as Crypto from 'expo-crypto';
 import { beijingDate, decodeEntries, kinds, labels, makeEntry, recognize, totals, validate } from './src/domain';
 import type { Draft, Entry, Kind } from './src/domain';
 import { cancel, schedule } from './src/notifications';
-import { fetchCloudStatus, syncLedgerEntry, type CloudStatus } from './src/cloud';
+import { fetchCloudStatus, loginOwner, logoutOwner, syncLedgerEntry, type CloudStatus } from './src/cloud';
 import { pendingSyncCount, updateSync } from './src/sync';
 
 const KEY = 'duanos:entries:v1';
@@ -37,9 +37,24 @@ function DuanOS() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<Kind | null>(null);
-  const [cloud, setCloud] = useState<CloudStatus>({ ok: false, authenticated: false, email: null });
+  const [cloud, setCloud] = useState<CloudStatus>({ ok: false, authenticated: false });
+  const [ownerPassword, setOwnerPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
   useEffect(() => { AsyncStorage.getItem(KEY).then(decodeEntries).then(setEntries).then(() => setLoaded(true)).catch(() => setLoadError('无法读取本地记录。为保护数据，已暂停写入，请重启应用重试。')); }, []);
-  useEffect(() => { if (Platform.OS === 'web') fetchCloudStatus().then(setCloud).catch(() => setCloud({ ok: false, authenticated: false, email: null })); }, []);
+  useEffect(() => { if (Platform.OS === 'web') fetchCloudStatus().then(setCloud).catch(() => setCloud({ ok: false, authenticated: false })); }, []);
+  const ownerLogin = async () => {
+    if (!ownerPassword || authBusy) return;
+    setAuthBusy(true);
+    try { await loginOwner(ownerPassword); setOwnerPassword(''); setCloud(await fetchCloudStatus()); setMessage('云端已连接'); }
+    catch (failure) { setMessage(failure instanceof Error && failure.message === 'LOGIN_TEMPORARILY_LOCKED' ? '登录尝试过多，请稍后再试' : '登录失败，请检查口令'); }
+    finally { setAuthBusy(false); }
+  };
+  const ownerLogout = async () => {
+    if (authBusy) return; setAuthBusy(true);
+    try { await logoutOwner(); setCloud({ ok: true, authenticated: false }); setMessage('已退出云端，本地记录不受影响'); }
+    catch { setMessage('退出失败，请稍后重试'); }
+    finally { setAuthBusy(false); }
+  };
   const persist = async (next: Entry[]) => { await AsyncStorage.setItem(KEY, JSON.stringify(next)); setEntries(next); };
   const syncOne = async (entry: Entry, current = entries) => {
     if (entry.kind !== 'ledger' || entry.syncState === 'synced') return;
@@ -148,12 +163,12 @@ function DuanOS() {
       {tab === 'AI' && <>
         <View style={[s.card, s.aiCard]}><View style={[s.iconBox, { width: 62, height: 62 }]}><Ionicons name="sparkles-outline" size={30} color={C.accent} /></View><Text style={s.sectionTitle}>你的统一输入助手</Text><Text style={[s.subtitle, { textAlign: 'center' }]}>输入一句话，识别后核对保存。\n可使用 iPhone 键盘自带的语音听写。</Text><Button title="输入一条记录" onPress={() => start()} disabled={!loaded} /></View>
         <Text style={s.sectionTitle}>试着这样说</Text>{kinds.map(k => <Pressable accessibilityRole="button" disabled={!loaded} key={k} onPress={() => start(k)} style={s.example}><Ionicons name={icons[k]} size={21} color={C.accent} /><View style={{ flex: 1, gap: 5 }}><Text style={s.label}>{labels[k]}</Text><Text style={s.body}>{examples[k]}</Text></View><Ionicons name="arrow-up-outline" size={19} color={C.muted} /></Pressable>)}
-        <View style={s.notice}><Text style={s.label}>Google 连接</Text><Text style={s.subtitle}>{cloud.authenticated ? `已授权 ${cloud.email ?? '当前账户'}，记账可同步到 Google Sheets 并发送 Gmail 回执。` : '当前使用本地规则识别。未连接时仍可正常本地使用；连接后只同步记账，其他记录保持本地。'}</Text>{Platform.OS === 'web' && !cloud.authenticated && <Button title="连接 Google" onPress={() => { window.location.href = '/api/auth/login'; }} />}</View>
+        <View style={s.notice}><Text style={s.label}>DuanOS 云同步</Text><Text style={s.subtitle}>{cloud.authenticated ? 'Owner Session 已登录。记账可经私有 Apps Script 桥接同步到 Google Sheets 并发送 Gmail 回执。' : '当前使用本地模式。输入个人口令后只同步记账，其他记录仍保存在本机。'}</Text>{Platform.OS === 'web' && !cloud.authenticated && <><TextInput accessibilityLabel="Owner 登录口令" secureTextEntry value={ownerPassword} onChangeText={setOwnerPassword} placeholder="个人登录口令" placeholderTextColor={C.muted} style={s.input} /><Button title={authBusy ? '正在登录…' : '登录并启用云同步'} disabled={authBusy || !ownerPassword} onPress={() => void ownerLogin()} /></>}{Platform.OS === 'web' && cloud.authenticated && <Button title={authBusy ? '正在退出…' : '退出云端'} secondary disabled={authBusy} onPress={() => void ownerLogout()} />}</View>
       </>}
       {tab === '数据' && <>
         <View style={s.stats}><View style={[s.card, s.stat]}><Text style={s.caption}>累计支出</Text><Text style={s.statNumber}>¥{cash(all.expense)}</Text></View><View style={[s.card, s.stat]}><Text style={s.caption}>累计收入</Text><Text style={[s.statNumber, { color: C.green }]}>¥{cash(all.income)}</Text></View></View>
         <View style={[s.card, { padding: 22, gap: 20 }]}><Text style={s.sectionTitle}>记录分布</Text>{kinds.map(k => { const count = entries.filter(e => e.kind === k).length; return <View key={k} style={{ gap: 9 }}><View style={s.rowBetween}><Text style={s.body}>{labels[k]}</Text><Text style={s.caption}>{count} 条</Text></View><View style={s.track}><View style={[s.fill, { width: `${entries.length ? count / entries.length * 100 : 0}%` }]} /></View></View>; })}</View>
-        <View style={[s.card, { padding: 22, gap: 14 }]}><Text style={s.sectionTitle}>数据与隐私</Text><Text style={s.subtitle}>所有记录先保存在当前设备。连接 Google 后，只有记账会同步到指定表格；网络失败不会删除本地记录。</Text><Text style={s.caption}>金额汇总基于本地流水，不代表银行账户余额。</Text><Text style={s.caption}>DuanOS v0.2.0 · Asia/Shanghai</Text></View>
+        <View style={[s.card, { padding: 22, gap: 14 }]}><Text style={s.sectionTitle}>数据与隐私</Text><Text style={s.subtitle}>所有记录先保存在当前设备。Owner 登录后，只有记账会经私有桥接同步到指定表格；网络失败不会删除本地记录。</Text><Text style={s.caption}>金额汇总基于本地流水，不代表银行账户余额。</Text><Text style={s.caption}>DuanOS v0.2.0 · Asia/Shanghai</Text></View>
       </>}
       <Text style={s.footer}>少一点切换，多一点专注。</Text>
     </ScrollView>
