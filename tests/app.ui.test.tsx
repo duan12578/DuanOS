@@ -1,10 +1,11 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import App from '../App';
 import { cancel, schedule } from '../src/notifications';
 
-beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); });
+beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ ok: true, authenticated: false }) })) as jest.Mock; });
 async function openInput(text: string) {
   await waitFor(() => expect(screen.getByLabelText('统一输入入口')).not.toBeDisabled());
   fireEvent.press(screen.getByLabelText('统一输入入口'));
@@ -51,10 +52,24 @@ test('review saves and AI page truthfully shows disconnected providers', async (
   fireEvent.press(screen.getByText('确认保存'));
   await screen.findByText('每日复盘已保存到本机');
   fireEvent.press(screen.getByRole('tab', { name: 'AI' }));
-  expect(screen.getByText(/当前使用本地规则识别/)).toBeTruthy();
+  expect(screen.getByText(/当前使用本地模式/)).toBeTruthy();
   fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
   fireEvent.press(screen.getByText('每日复盘', { exact: true }));
   expect(screen.getByText('每日复盘：今天读完一章书')).toBeTruthy();
+});
+test('owner login changes cloud status without exposing a bridge secret', async () => {
+  const originalOS = Platform.OS; Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+  let healthCalls = 0;
+  global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/health') { healthCalls++; return { ok: true, json: async () => ({ ok: true, authenticated: healthCalls > 1 }) }; }
+    return { ok: true, json: async () => ({ ok: true, authenticated: true }) };
+  }) as jest.Mock;
+  try {
+    render(<App />); fireEvent.press(screen.getByRole('tab', { name: 'AI' }));
+    await screen.findByLabelText('Owner 登录口令'); fireEvent.changeText(screen.getByLabelText('Owner 登录口令'), 'private-passphrase'); fireEvent.press(screen.getByText('登录并启用云同步'));
+    await screen.findByText('Owner Session 已登录。记账可经私有 Apps Script 桥接同步到 Google Sheets 并发送 Gmail 回执。');
+    expect(screen.queryByText(/APPS_SCRIPT_SHARED_SECRET/)).toBeNull();
+  } finally { Object.defineProperty(Platform, 'OS', { configurable: true, value: originalOS }); }
 });
 test('invalid money blocks persistence and keeps the draft', async () => {
   render(<App />); await openInput('微信支付12.345元');
