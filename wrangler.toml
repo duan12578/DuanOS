@@ -1,3 +1,7 @@
 name = "duanos"
 compatibility_date = "2026-09-01"
 pages_build_output_dir = "dist"
+
+[[kv_namespaces]]
+binding = "DUANOS_KV"
+id = "28ad5f193add49528a80977d5ce92398"
