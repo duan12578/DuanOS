@@ -2,7 +2,8 @@ export const kinds = ['ledger', 'todo', 'reminder', 'review'] as const;
 export type Kind = typeof kinds[number];
 export const labels: Record<Kind, string> = { ledger: '记账', todo: '待办', reminder: '定时提醒', review: '每日复盘' };
 export type Draft = { kind: Kind | null; text: string; amount: string; account: string; direction: 'expense' | 'income'; time: string; date: string };
-export type Entry = { id: string; kind: Kind; text: string; createdAt: string; date: string; amountCents?: number; account?: string; direction?: 'expense' | 'income'; dueAt?: string; done: boolean; notificationId?: string; notificationState?: 'scheduled' | 'unavailable' | 'cancelled' };
+export type SyncState = 'local' | 'syncing' | 'synced' | 'error';
+export type Entry = { id: string; kind: Kind; text: string; createdAt: string; date: string; amountCents?: number; account?: string; direction?: 'expense' | 'income'; dueAt?: string; done: boolean; notificationId?: string; notificationState?: 'scheduled' | 'unavailable' | 'cancelled'; syncState: SyncState; syncError?: string };
 
 export function beijingDate(now = new Date()): string { return new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10); }
 export function validDate(date: string): boolean {
@@ -68,7 +69,7 @@ export function validate(d: Draft, now = new Date()): string | undefined {
 }
 export function makeEntry(d: Draft, id: string, now = new Date()): Entry {
   const error = validate(d, now); if (error) throw new Error(error);
-  return { id, kind: d.kind!, text: d.text.trim(), createdAt: now.toISOString(), date: d.date, done: false,
+  return { id, kind: d.kind!, text: d.text.trim(), createdAt: now.toISOString(), date: d.date, done: false, syncState: 'local',
     ...(d.kind === 'ledger' ? { amountCents: moneyCents(d.amount), account: d.account.trim(), direction: d.direction } : {}),
     ...(d.kind === 'reminder' ? { dueAt: parseTime(d.time) } : {}) };
 }
@@ -80,7 +81,7 @@ export function totals(entries: Entry[], date?: string) {
 export function decodeEntries(raw: string | null): Entry[] {
   if (!raw) return [];
   const value: unknown = JSON.parse(raw);
-  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense'].includes(e.direction))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
+  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.syncState === undefined || ['local', 'syncing', 'synced', 'error'].includes(e.syncState)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense'].includes(e.direction))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
   if (new Set(value.map(e => e.id)).size !== value.length) throw new Error('本地记录编号重复，已停止写入。');
-  return value;
+  return value.map(e => ({ ...e, syncState: e.syncState ?? 'local' }));
 }
