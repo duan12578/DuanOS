@@ -1,6 +1,17 @@
 import type { Entry } from './domain';
 
-export type CloudStatus = { ok: boolean; authenticated: boolean; email: string | null };
+export type CloudStatus = { ok: boolean; authenticated: boolean };
+
+export async function loginOwner(password: string): Promise<void> {
+  const response = await fetch('/api/auth/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ password }) });
+  const result = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+  if (!response.ok || !result.ok) throw new Error(result.error || 'LOGIN_FAILED');
+}
+
+export async function logoutOwner(): Promise<void> {
+  const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error('LOGOUT_FAILED');
+}
 
 export function ledgerPayload(entry: Entry) {
   if (entry.kind !== 'ledger' || !entry.amountCents || !entry.account || !entry.direction) throw new Error('INVALID_LEDGER_ENTRY');
