@@ -5,6 +5,6 @@
     "ios": { "supportsTablet": false, "bundleIdentifier": "com.duan12578.duanos" },
     "android": { "package": "com.duan12578.duanos" },
     "plugins": ["expo-notifications"],
-    "web": { "bundler": "metro" }
+    "web": { "bundler": "metro", "baseUrl": "/DuanOS" }
   }
 }
