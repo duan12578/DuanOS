@@ -20,8 +20,8 @@ const origin = 'https://example.com';
 function envWith(overrides: Partial<Env> = {}): Env { return { DUANOS_KV: new MemoryKV(), APPS_SCRIPT_WEB_APP_URL: 'https://script.google.com/macros/s/test-deployment/exec', APPS_SCRIPT_SHARED_SECRET: 'test-shared-secret-at-least-32-characters', DUANOS_OWNER_PASSWORD_HASH: '', ...overrides }; }
 async function passwordHash(password: string): Promise<string> {
   const salt = new Uint8Array(16).fill(7); const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 600_000 }, material, 256);
-  return `pbkdf2-sha256$600000$${base64url(salt)}$${base64url(new Uint8Array(bits))}`;
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, material, 256);
+  return `pbkdf2-sha256$100000$${base64url(salt)}$${base64url(new Uint8Array(bits))}`;
 }
 function post(path: string, body: unknown, cookie?: string, extra: HeadersInit = {}) { return new Request(`${origin}${path}`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...extra }, body: JSON.stringify(body) }); }
 async function putSession(kv: MemoryKV, id = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN') { const value: StoredSession = { createdAt: Date.now(), expiresAt: Date.now() + 3600_000 }; await kv.put(`session:${id}`, JSON.stringify(value)); return `__Host-duanos_session=${id}`; }
