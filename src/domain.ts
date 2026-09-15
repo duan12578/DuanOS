@@ -1,9 +1,17 @@
 export const kinds = ['ledger', 'todo', 'reminder', 'review'] as const;
 export type Kind = typeof kinds[number];
+export type LedgerDirection = 'expense' | 'income' | 'transfer';
 export const labels: Record<Kind, string> = { ledger: '记账', todo: '待办', reminder: '定时提醒', review: '每日复盘' };
-export type Draft = { kind: Kind | null; text: string; amount: string; account: string; direction: 'expense' | 'income'; time: string; date: string };
+export type Draft = { kind: Kind | null; text: string; amount: string; account: string; counterpartyAccount: string; direction: LedgerDirection; time: string; date: string };
 export type SyncState = 'local' | 'syncing' | 'synced' | 'error';
-export type Entry = { id: string; kind: Kind; text: string; createdAt: string; date: string; amountCents?: number; account?: string; direction?: 'expense' | 'income'; dueAt?: string; done: boolean; notificationId?: string; notificationState?: 'scheduled' | 'unavailable' | 'cancelled'; syncState: SyncState; syncError?: string };
+export type Entry = { id: string; kind: Kind; text: string; createdAt: string; date: string; amountCents?: number; account?: string; counterpartyAccount?: string; direction?: LedgerDirection; dueAt?: string; done: boolean; notificationId?: string; notificationState?: 'scheduled' | 'unavailable' | 'cancelled'; syncState: SyncState; syncError?: string };
+
+const ACCOUNT_PATTERN = /微信零钱|微信钱包|微信支付|工资卡|信用卡|支付宝|银行卡|现金|微信/g;
+
+export function normalizeAccount(value: string): string {
+  const account = value.trim();
+  return /^(微信|微信支付|微信钱包|微信零钱)$/.test(account) ? '微信零钱' : account;
+}
 
 export function beijingDate(now = new Date()): string { return new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10); }
 export function validDate(date: string): boolean {
@@ -29,7 +37,10 @@ export function recognize(text: string, now = new Date()): Draft {
   if (/^(咨询|假设|举例|测试不执行)/.test(source)) kind = null;
   const amount = source.match(/(?:收入|支出|支付|花了|金额)\s*[¥￥]?\s*(\d+(?:\.\d+)?)/)?.[1]
     ?? source.match(/(\d+(?:\.\d+)?)\s*(?:元|块)/)?.[1] ?? '';
-  const account = source.match(/工资卡|信用卡|微信零钱|支付宝|现金|银行卡|微信支付|微信/)?.[0] ?? '';
+  const accounts = Array.from(source.matchAll(ACCOUNT_PATTERN), match => normalizeAccount(match[0]));
+  const transfer = accounts.length >= 2 && (/转入|转出|转到|转至|转账(?:到|至)?/.test(source) || /从.+(?:到|至).+/.test(source));
+  const account = accounts[0] ?? '';
+  const counterpartyAccount = transfer ? accounts[1] ?? '' : '';
   let date = beijingDate(now);
   if (/昨天/.test(source)) date = beijingDate(new Date(now.getTime() - 86400000));
   const explicit = source.match(/\d{4}-\d{2}-\d{2}/)?.[0];
@@ -47,7 +58,7 @@ export function recognize(text: string, now = new Date()): Draft {
       time = `${d} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
   }
-  return { kind, text: source, amount, account: /微信/.test(account) ? '微信零钱' : account, direction: /收入|到账/.test(source) ? 'income' : 'expense', time, date };
+  return { kind, text: source, amount, account, counterpartyAccount, direction: transfer ? 'transfer' : /收入|到账/.test(source) ? 'income' : 'expense', time, date };
 }
 export function validate(d: Draft, now = new Date()): string | undefined {
   if (!d.kind) return '请选择一类记录。';
@@ -56,9 +67,13 @@ export function validate(d: Draft, now = new Date()): string | undefined {
   if (!validDate(d.date)) return '请填写有效日期，格式为 YYYY-MM-DD。';
   if (d.kind === 'ledger') {
     if ((d.text.match(/\d+(?:\.\d+)?\s*(?:元|块)/g) ?? []).length > 1) return '检测到多个金额，请拆成多条记录，避免误记。';
-    if (/退款|还款|转账/.test(d.text)) return 'v0.1.1 暂不处理退款、还款或转账，请在原记账系统操作。';
+    if (/退款|还款/.test(d.text)) return '当前版本暂不处理退款或还款，请在原记账系统操作。';
     if (!moneyCents(d.amount)) return '请输入大于 0、最多两位小数的金额（上限一亿元）。';
-    if (!d.account.trim()) return '请补充付款或收款账户。';
+    if (!d.account.trim()) return d.direction === 'transfer' ? '请补充转出账户。' : '请补充付款或收款账户。';
+    if (d.direction === 'transfer') {
+      if (!d.counterpartyAccount.trim()) return '请补充转入账户。';
+      if (normalizeAccount(d.account) === normalizeAccount(d.counterpartyAccount)) return '转出账户和转入账户不能相同。';
+    }
   }
   if (d.kind === 'reminder') {
     if (/每天|每日|每周|每月|每年|循环/.test(d.text)) return '此版本支持单次提醒，循环提醒请在原待办系统设置。';
@@ -70,18 +85,19 @@ export function validate(d: Draft, now = new Date()): string | undefined {
 export function makeEntry(d: Draft, id: string, now = new Date()): Entry {
   const error = validate(d, now); if (error) throw new Error(error);
   return { id, kind: d.kind!, text: d.text.trim(), createdAt: now.toISOString(), date: d.date, done: false, syncState: 'local',
-    ...(d.kind === 'ledger' ? { amountCents: moneyCents(d.amount), account: d.account.trim(), direction: d.direction } : {}),
+    ...(d.kind === 'ledger' ? { amountCents: moneyCents(d.amount), account: normalizeAccount(d.account), counterpartyAccount: d.direction === 'transfer' ? normalizeAccount(d.counterpartyAccount) : '', direction: d.direction } : {}),
     ...(d.kind === 'reminder' ? { dueAt: parseTime(d.time) } : {}) };
 }
 export function totals(entries: Entry[], date?: string) {
   return entries.filter(e => e.kind === 'ledger' && (!date || e.date === date)).reduce((s, e) => {
-    s[e.direction === 'income' ? 'income' : 'expense'] += e.amountCents ?? 0; return s;
+    if (e.direction !== 'transfer') s[e.direction === 'income' ? 'income' : 'expense'] += e.amountCents ?? 0;
+    return s;
   }, { income: 0, expense: 0 });
 }
 export function decodeEntries(raw: string | null): Entry[] {
   if (!raw) return [];
   const value: unknown = JSON.parse(raw);
-  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.syncState === undefined || ['local', 'syncing', 'synced', 'error'].includes(e.syncState)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense'].includes(e.direction))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
+  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.syncState === undefined || ['local', 'syncing', 'synced', 'error'].includes(e.syncState)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense', 'transfer'].includes(e.direction) && (e.direction !== 'transfer' || (e.account.trim() && typeof e.counterpartyAccount === 'string' && e.counterpartyAccount.trim() && normalizeAccount(e.account) !== normalizeAccount(e.counterpartyAccount))))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
   if (new Set(value.map(e => e.id)).size !== value.length) throw new Error('本地记录编号重复，已停止写入。');
   return value.map(e => ({ ...e, syncState: e.syncState ?? 'local' }));
 }

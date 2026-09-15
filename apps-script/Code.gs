@@ -27,17 +27,24 @@ function constantTimeEqual_(left, right) {
 
 function validPayload_(p, requestId) {
   if (!p || p.id !== requestId || !/^[A-Za-z0-9_-]{8,128}$/.test(requestId)) return false;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date) || ['支出', '收入'].indexOf(p.type) < 0) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date) || ['支出', '收入', '转账'].indexOf(p.type) < 0) return false;
   var parts = p.date.split('-').map(Number); var date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
   if (date.toISOString().slice(0, 10) !== p.date) return false;
   if (!Number.isInteger(p.amountCents) || p.amountCents <= 0 || p.amountCents > 10000000000) return false;
   var strings = ['category', 'account', 'content', 'note', 'counterpartyAccount', 'recordedAt'];
   for (var i = 0; i < strings.length; i++) if (typeof p[strings[i]] !== 'string' || p[strings[i]].length > 4000) return false;
-  return p.account.trim().length > 0 && p.content.trim().length > 0 && !isNaN(Date.parse(p.recordedAt));
+  if (p.account.trim().length === 0 || p.content.trim().length === 0 || isNaN(Date.parse(p.recordedAt))) return false;
+  if (p.type === '转账' && (p.counterpartyAccount.trim().length === 0 || p.account.trim() === p.counterpartyAccount.trim())) return false;
+  return true;
 }
 
 function ledgerRow_(p) {
   return [p.date, p.type, p.category, (p.amountCents / 100).toFixed(2), p.account.trim(), p.content.trim(), p.note.trim(), p.counterpartyAccount.trim(), Utilities.formatDate(new Date(p.recordedAt), 'Asia/Shanghai', 'yyyy-MM-dd HH:mm:ss')];
+}
+
+function receiptBody_(p) {
+  var prefix = '已写入记账流水：' + p.date + '｜' + p.type + '｜' + (p.amountCents / 100).toFixed(2) + ' 元｜';
+  return p.type === '转账' ? prefix + p.account.trim() + ' → ' + p.counterpartyAccount.trim() + '｜' + p.content : prefix + p.content;
 }
 
 function doPost(e) {
@@ -67,7 +74,7 @@ function doPost(e) {
       if (state !== 'sheet_written') throw new Error('SHEET_NOT_WRITTEN');
       var receiptEmail = properties.getProperty('RECEIPT_EMAIL');
       if (!receiptEmail) throw new Error('NOT_CONFIGURED');
-      MailApp.sendEmail(receiptEmail, 'DuanOS 记账成功回执', '已写入记账流水：' + request.payload.date + '｜' + request.payload.type + '｜' + (request.payload.amountCents / 100).toFixed(2) + ' 元｜' + request.payload.content);
+      MailApp.sendEmail(receiptEmail, 'DuanOS 记账成功回执', receiptBody_(request.payload));
       properties.setProperty(stateKey, 'complete');
       return output_({ ok: true, duplicate: false });
     } finally { lock.releaseLock(); }
