@@ -30,6 +30,7 @@ test('ledger saves only after confirmation, updates totals and survives remount'
 test('transfer review shows both accounts and history uses a neutral amount', async () => {
   render(<App />);
   await openInput('工资卡转入微信钱包10元');
+  expect(screen.getByText('转账')).toBeTruthy();
   expect(screen.getByLabelText('金额（元）').props.value).toBe('10');
   expect(screen.getByLabelText('转出账户').props.value).toBe('工资卡');
   expect(screen.getByLabelText('转入账户').props.value).toBe('微信零钱');

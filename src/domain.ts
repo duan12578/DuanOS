@@ -38,7 +38,7 @@ export function recognize(text: string, now = new Date()): Draft {
   const amount = source.match(/(?:收入|支出|支付|花了|金额)\s*[¥￥]?\s*(\d+(?:\.\d+)?)/)?.[1]
     ?? source.match(/(\d+(?:\.\d+)?)\s*(?:元|块)/)?.[1] ?? '';
   const accounts = Array.from(source.matchAll(ACCOUNT_PATTERN), match => normalizeAccount(match[0]));
-  const transfer = /转入|转出|转到|转至|转账(?:到|至)?/.test(source) || /从.+(?:到|至).+/.test(source);
+  const transfer = accounts.length >= 2 && (/转入|转出|转到|转至|转账(?:到|至)?/.test(source) || /从.+(?:到|至).+/.test(source));
   const account = accounts[0] ?? '';
   const counterpartyAccount = transfer ? accounts[1] ?? '' : '';
   let date = beijingDate(now);
@@ -97,7 +97,7 @@ export function totals(entries: Entry[], date?: string) {
 export function decodeEntries(raw: string | null): Entry[] {
   if (!raw) return [];
   const value: unknown = JSON.parse(raw);
-  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.syncState === undefined || ['local', 'syncing', 'synced', 'error'].includes(e.syncState)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense', 'transfer'].includes(e.direction) && (e.direction !== 'transfer' || (typeof e.counterpartyAccount === 'string' && e.counterpartyAccount.trim() && normalizeAccount(e.account) !== normalizeAccount(e.counterpartyAccount))))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
+  if (!Array.isArray(value) || !value.every(e => e && typeof e.id === 'string' && kinds.includes(e.kind) && typeof e.text === 'string' && typeof e.done === 'boolean' && validDate(e.date) && typeof e.createdAt === 'string' && Number.isFinite(Date.parse(e.createdAt)) && (e.syncState === undefined || ['local', 'syncing', 'synced', 'error'].includes(e.syncState)) && (e.kind !== 'ledger' || (Number.isSafeInteger(e.amountCents) && e.amountCents > 0 && typeof e.account === 'string' && ['income', 'expense', 'transfer'].includes(e.direction) && (e.direction !== 'transfer' || (e.account.trim() && typeof e.counterpartyAccount === 'string' && e.counterpartyAccount.trim() && normalizeAccount(e.account) !== normalizeAccount(e.counterpartyAccount))))) && (e.kind !== 'reminder' || (typeof e.dueAt === 'string' && Number.isFinite(Date.parse(e.dueAt)))))) throw new Error('本地数据格式异常，已停止写入以保护原始数据。');
   if (new Set(value.map(e => e.id)).size !== value.length) throw new Error('本地记录编号重复，已停止写入。');
   return value.map(e => ({ ...e, syncState: e.syncState ?? 'local' }));
 }

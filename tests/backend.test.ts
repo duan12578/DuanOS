@@ -108,6 +108,8 @@ test('Apps Script accepts transfer structure and formats a clear transfer receip
   assert.equal(vm.runInContext("validPayload_(Object.assign({}, input, {counterpartyAccount: ''}), input.id)", context), false);
   assert.equal(vm.runInContext("validPayload_(Object.assign({}, input, {counterpartyAccount: input.account}), input.id)", context), false);
   assert.match(vm.runInContext('receiptBody_(input)', context) as string, /转账｜10\.00 元｜工资卡 → 微信零钱/);
+  context.input = payload;
+  assert.equal(vm.runInContext('receiptBody_(input)', context), '已写入记账流水：2026-09-13｜支出｜25.00 元｜午饭');
 });
 
 test('Apps Script source contains no real configuration', async () => {

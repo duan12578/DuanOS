@@ -49,13 +49,16 @@ test('refunds and repayments remain unsupported, while invalid transfers are rej
   assert.ok(validate(recognize('工资卡还款25元', now), now));
   assert.ok(validate(recognize('工资卡退款25元', now), now));
   assert.ok(validate(recognize('微信早餐5元午饭25元', now), now));
-  assert.match(validate(recognize('工资卡转出10元', now), now) ?? '', /转入账户/);
+  const missingDestination = { ...recognize('工资卡支出10元', now), direction: 'transfer' as const };
+  assert.match(validate(missingDestination, now) ?? '', /转入账户/);
   const sameAccount = { ...recognize('工资卡转到微信零钱10元', now), counterpartyAccount: '工资卡' };
   assert.match(validate(sameAccount, now) ?? '', /不能相同/);
 });
 test('ordinary expenses and income keep their existing direction', () => {
   assert.equal(recognize('工资卡支出10元', now).direction, 'expense');
   assert.equal(recognize('工资卡收入10元', now).direction, 'income');
+  assert.equal(recognize('从早上到晚上工资卡支出10元', now).direction, 'expense');
+  assert.equal(recognize('工资卡收入10元后转入理财', now).direction, 'income');
 });
 test('integer-cent totals and date filtering', () => {
   const one = makeEntry(recognize('微信支付0.10元', now), '1', now);
@@ -75,6 +78,9 @@ test('persistence rejects corrupt data instead of overwriting it', () => {
   const oldLedger = makeEntry(recognize('工资卡收入30元', now), 'old-ledger', now);
   delete oldLedger.counterpartyAccount;
   assert.deepEqual(decodeEntries(JSON.stringify([oldLedger])), [oldLedger]);
+  const transfer = makeEntry(recognize('工资卡转到微信零钱10元', now), 'transfer-ledger', now);
+  assert.throws(() => decodeEntries(JSON.stringify([{ ...transfer, account: '' }])));
+  assert.throws(() => decodeEntries(JSON.stringify([{ ...transfer, counterpartyAccount: '' }])));
 });
 test('empty, oversized and unclassified entries cannot be created', () => {
   assert.throws(() => makeEntry(recognize('', now), '1', now));

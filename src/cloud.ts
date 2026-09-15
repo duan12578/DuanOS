@@ -14,8 +14,8 @@ export async function logoutOwner(): Promise<void> {
 }
 
 export function ledgerPayload(entry: Entry) {
-  if (entry.kind !== 'ledger' || !entry.amountCents || !entry.account || !entry.direction) throw new Error('INVALID_LEDGER_ENTRY');
-  if (entry.direction === 'transfer' && (!entry.counterpartyAccount || entry.account === entry.counterpartyAccount)) throw new Error('INVALID_LEDGER_ENTRY');
+  if (entry.kind !== 'ledger' || !entry.amountCents || !entry.account?.trim() || !entry.direction) throw new Error('INVALID_LEDGER_ENTRY');
+  if (entry.direction === 'transfer' && (!entry.counterpartyAccount?.trim() || entry.account.trim() === entry.counterpartyAccount.trim())) throw new Error('INVALID_LEDGER_ENTRY');
   return {
     id: entry.id,
     date: entry.date,

@@ -43,8 +43,8 @@ function ledgerRow_(p) {
 }
 
 function receiptBody_(p) {
-  var account = p.type === '转账' ? p.account.trim() + ' → ' + p.counterpartyAccount.trim() : p.account.trim();
-  return '已写入记账流水：' + p.date + '｜' + p.type + '｜' + (p.amountCents / 100).toFixed(2) + ' 元｜' + account + '｜' + p.content;
+  var prefix = '已写入记账流水：' + p.date + '｜' + p.type + '｜' + (p.amountCents / 100).toFixed(2) + ' 元｜';
+  return p.type === '转账' ? prefix + p.account.trim() + ' → ' + p.counterpartyAccount.trim() + '｜' + p.content : prefix + p.content;
 }
 
 function doPost(e) {
