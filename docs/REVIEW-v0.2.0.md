@@ -24,5 +24,5 @@
 - Cloudflare KV 最终一致，登录限速在极端跨区域并发下不是严格全局计数；本系统仅限单一所有者。若威胁模型扩大，应迁移限速和入口幂等锁到 Durable Object。
 - PBKDF2-SHA256 100,000 次低于理想密码哈希工作因子；v0.2.0 依赖单 Owner、高熵密码、五次失败锁定、HTTPS、安全 Cookie 与 Cloudflare Secret 共同降低风险。后续版本应评估 scrypt 或 Cloudflare Access。
 - Apps Script Script Properties 有配额，不适合无限增长。未来需要保留清理策略，但在不能证明远端重试窗口结束前不得删除幂等状态。
-- Apps Script Web App 的部署与 Script Properties 尚未实际配置，本轮不进行真实联调。Web App 为了接受 Cloudflare 服务端请求需要允许匿名 HTTP 访问，因此 URL 不是认证边界；安全性依赖高熵共享 Secret、HMAC 验签、时间窗和幂等校验。
+- Apps Script Web App、Script Properties 与 Cloudflare Production 已正式配置，Apps Script bridge 已进入真实联调；当前仅阻塞于 Owner Auth 的 Cloudflare PBKDF2 兼容性，本 PR 修复该问题。Web App 为了接受 Cloudflare 服务端请求需要允许匿名 HTTP 访问，因此 URL 不是认证边界；安全性依赖高熵共享 Secret、HMAC 验签、时间窗和幂等校验。
 - 本地记录未额外加密；清除 Safari 网站数据仍会删除本地记录。
