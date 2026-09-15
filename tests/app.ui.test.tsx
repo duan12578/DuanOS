@@ -27,6 +27,21 @@ test('ledger saves only after confirmation, updates totals and survives remount'
   fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
   expect(screen.getByText('微信支付午饭25元')).toBeTruthy();
 });
+test('transfer review shows both accounts and history uses a neutral amount', async () => {
+  render(<App />);
+  await openInput('工资卡转入微信钱包10元');
+  expect(screen.getByLabelText('金额（元）').props.value).toBe('10');
+  expect(screen.getByLabelText('转出账户').props.value).toBe('工资卡');
+  expect(screen.getByLabelText('转入账户').props.value).toBe('微信零钱');
+  expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('确认保存'));
+  await screen.findByText('记账已保存到本机');
+  fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
+  expect(screen.getByText(/记账 · .* · 工资卡 → 微信零钱/)).toBeTruthy();
+  expect(screen.getByText('↔ ¥10.00')).toBeTruthy();
+  fireEvent.press(screen.getByRole('tab', { name: '数据' }));
+  expect(screen.getAllByText('¥0.00')).toHaveLength(2);
+});
 test('todo completion works without requesting notification permissions', async () => {
   render(<App />); await openInput('待办：背单词，不需要提醒');
   fireEvent.press(screen.getByText('确认保存'));

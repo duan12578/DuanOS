@@ -1,7 +1,7 @@
 export interface LedgerPayload {
   id: string;
   date: string;
-  type: '支出' | '收入';
+  type: '支出' | '收入' | '转账';
   category: string;
   amountCents: number;
   account: string;
@@ -16,10 +16,11 @@ export function validateLedgerPayload(value: unknown): LedgerPayload {
   const p = value as Record<string, unknown>;
   if (typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(p.id)) throw new Error('INVALID_ID');
   if (typeof p.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.date) || new Date(`${p.date}T00:00:00Z`).toISOString().slice(0, 10) !== p.date) throw new Error('INVALID_DATE');
-  if (p.type !== '支出' && p.type !== '收入') throw new Error('INVALID_TYPE');
+  if (p.type !== '支出' && p.type !== '收入' && p.type !== '转账') throw new Error('INVALID_TYPE');
   if (!Number.isSafeInteger(p.amountCents) || (p.amountCents as number) <= 0 || (p.amountCents as number) > 10_000_000_000) throw new Error('INVALID_AMOUNT');
   for (const key of ['category', 'account', 'content', 'note', 'counterpartyAccount', 'recordedAt']) if (typeof p[key] !== 'string' || (p[key] as string).length > 4000) throw new Error(`INVALID_${key.toUpperCase()}`);
   if (!(p.account as string).trim() || !(p.content as string).trim() || !Number.isFinite(Date.parse(p.recordedAt as string))) throw new Error('INVALID_REQUIRED_FIELD');
+  if (p.type === '转账' && (!(p.counterpartyAccount as string).trim() || (p.account as string).trim() === (p.counterpartyAccount as string).trim())) throw new Error('INVALID_TRANSFER_ACCOUNTS');
   return p as unknown as LedgerPayload;
 }
 

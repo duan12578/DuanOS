@@ -16,6 +16,7 @@ class MemoryKV implements KVNamespaceLike {
   async delete(key: string) { this.data.delete(key); }
 }
 const payload = { id: 'stable-id-123', date: '2026-09-13', type: '支出' as const, category: '餐饮', amountCents: 2500, account: '微信零钱', content: '午饭', note: '', counterpartyAccount: '', recordedAt: '2026-09-13T00:00:00.000Z' };
+const transferPayload = { ...payload, id: 'transfer-id-123', type: '转账' as const, category: '', amountCents: 1000, account: '工资卡', content: '工资卡转入微信钱包10元', counterpartyAccount: '微信零钱' };
 const origin = 'https://example.com';
 function envWith(overrides: Partial<Env> = {}): Env { return { DUANOS_KV: new MemoryKV(), APPS_SCRIPT_WEB_APP_URL: 'https://script.google.com/macros/s/test-deployment/exec', APPS_SCRIPT_SHARED_SECRET: 'test-shared-secret-at-least-32-characters', DUANOS_OWNER_PASSWORD_HASH: '', ...overrides }; }
 async function passwordHash(password: string): Promise<string> {
@@ -29,6 +30,12 @@ async function putSession(kv: MemoryKV, id = 'abcdefghijklmnopqrstuvwxyzABCDEFGH
 test('ledger validation and row order match the nine sheet columns', () => {
   assert.deepEqual(ledgerRow(validateLedgerPayload(payload)), ['2026-09-13', '支出', '餐饮', '25.00', '微信零钱', '午饭', '', '', '2026-09-13 08:00:00']);
   assert.throws(() => validateLedgerPayload({ ...payload, amountCents: -1 })); assert.throws(() => validateLedgerPayload({ ...payload, type: '退款' }));
+});
+
+test('ledger validation accepts valid transfers and rejects invalid account pairs', () => {
+  assert.deepEqual(ledgerRow(validateLedgerPayload(transferPayload)), ['2026-09-13', '转账', '', '10.00', '工资卡', '工资卡转入微信钱包10元', '', '微信零钱', '2026-09-13 08:00:00']);
+  assert.throws(() => validateLedgerPayload({ ...transferPayload, counterpartyAccount: '' }));
+  assert.throws(() => validateLedgerPayload({ ...transferPayload, counterpartyAccount: '工资卡' }));
 });
 
 test('correct owner password creates an opaque server session; wrong password does not', async () => {
@@ -92,6 +99,15 @@ test('Apps Script rejects stale timestamps, malformed payloads and bad signature
   assert.deepEqual(await runAppsScript({ timestamp: Date.now() - 600_000, requestId: payload.id, action: 'ledger.append', payload, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
   assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'unknown', payload, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
   assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'ledger.append', payload: { ...payload, amountCents: -1 }, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
+});
+
+test('Apps Script accepts transfer structure and formats a clear transfer receipt', async () => {
+  const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8'));
+  const context = vm.createContext({ input: transferPayload }); vm.runInContext(source, context);
+  assert.equal(vm.runInContext('validPayload_(input, input.id)', context), true);
+  assert.equal(vm.runInContext("validPayload_(Object.assign({}, input, {counterpartyAccount: ''}), input.id)", context), false);
+  assert.equal(vm.runInContext("validPayload_(Object.assign({}, input, {counterpartyAccount: input.account}), input.id)", context), false);
+  assert.match(vm.runInContext('receiptBody_(input)', context) as string, /转账｜10\.00 元｜工资卡 → 微信零钱/);
 });
 
 test('Apps Script source contains no real configuration', async () => {
