@@ -96,9 +96,9 @@ async function runAppsScript(request: unknown): Promise<{ ok: boolean; error?: s
 }
 
 test('Apps Script rejects stale timestamps, malformed payloads and bad signatures', async () => {
-  assert.deepEqual(await runAppsScript({ timestamp: Date.now() - 600_000, requestId: payload.id, action: 'ledger.append', payload, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
-  assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'unknown', payload, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
-  assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'ledger.append', payload: { ...payload, amountCents: -1 }, signature: 'bad' }), { ok: false, error: 'BRIDGE_REQUEST_FAILED' });
+  assert.deepEqual(await runAppsScript({ timestamp: Date.now() - 600_000, requestId: payload.id, action: 'ledger.append', payload, signature: 'bad' }), { ok: false, error: 'STALE_REQUEST' });
+  assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'unknown', payload, signature: 'bad' }), { ok: false, error: 'INVALID_REQUEST' });
+  assert.deepEqual(await runAppsScript({ timestamp: Date.now(), requestId: payload.id, action: 'ledger.append', payload: { ...payload, amountCents: -1 }, signature: 'bad' }), { ok: false, error: 'INVALID_REQUEST' });
 });
 
 test('Apps Script accepts transfer structure and formats a clear transfer receipt', async () => {
@@ -130,7 +130,9 @@ test('bridge stages survive the ledger API without exposing sensitive context', 
     { name: 'HTTP 503 with non-JSON body', response: () => new Response(raw, { status: 503 }), code: 'BRIDGE_HTTP_ERROR' },
     { name: 'HTTP 403 with JSON rejection', response: () => Response.json({ ok: false, error: raw }, { status: 403 }), code: 'BRIDGE_HTTP_ERROR' },
     { name: 'non-JSON response', response: () => new Response(raw), code: 'BRIDGE_JSON_ERROR' },
-    ...['INVALID_SIGNATURE', 'INVALID_REQUEST', 'STALE_REQUEST', 'NOT_CONFIGURED', 'LEDGER_SHEET_NOT_FOUND', 'BRIDGE_REQUEST_FAILED', raw].map(error => ({ name: `remote ${error.split(' ')[0]}`, response: () => Response.json({ ok: false, error, context: raw, stack: raw }), code: 'BRIDGE_REMOTE_ERROR' })),
+    ...['INVALID_SIGNATURE', 'INVALID_REQUEST', 'STALE_REQUEST', 'NOT_CONFIGURED', 'LEDGER_SHEET_NOT_FOUND', 'SHEET_NOT_WRITTEN'].map(error => ({ name: `remote ${error}`, response: () => Response.json({ ok: false, error, context: raw, stack: raw }), code: `BRIDGE_REMOTE_${error}` })),
+    ...['BRIDGE_REQUEST_FAILED', raw, '__proto__', 'constructor', 'INVALID_SIGNATURE extra', ' INVALID_SIGNATURE'].map(error => ({ name: `unknown remote ${error.split(' ')[0]}`, response: () => Response.json({ ok: false, error, context: raw, stack: raw }), code: 'BRIDGE_REMOTE_ERROR' })),
+    ...[null, 123, { message: 'INVALID_SIGNATURE' }, ['INVALID_SIGNATURE']].map((error, i) => ({ name: `non-string remote ${i}`, response: () => Response.json({ ok: false, error }), code: 'BRIDGE_REMOTE_ERROR' })),
     ...[null, {}, [], { ok: 'true' }].map((value, i) => ({ name: `invalid result shape ${i}`, response: () => Response.json(value), code: 'BRIDGE_REMOTE_ERROR' })),
   ];
   for (const scenario of cases) await t.test(scenario.name, async (st) => {

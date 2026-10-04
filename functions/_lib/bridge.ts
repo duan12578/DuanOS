@@ -11,6 +11,18 @@ export function bridgeFailureCode(error: unknown): BridgeErrorCode | 'SYNC_FAILE
   return error instanceof BridgeError ? error.code : 'SYNC_FAILED';
 }
 
+function remoteFailureCode(error: unknown): BridgeErrorCode {
+  switch (error) {
+    case 'NOT_CONFIGURED': return 'BRIDGE_REMOTE_NOT_CONFIGURED';
+    case 'STALE_REQUEST': return 'BRIDGE_REMOTE_STALE_REQUEST';
+    case 'INVALID_REQUEST': return 'BRIDGE_REMOTE_INVALID_REQUEST';
+    case 'INVALID_SIGNATURE': return 'BRIDGE_REMOTE_INVALID_SIGNATURE';
+    case 'LEDGER_SHEET_NOT_FOUND': return 'BRIDGE_REMOTE_LEDGER_SHEET_NOT_FOUND';
+    case 'SHEET_NOT_WRITTEN': return 'BRIDGE_REMOTE_SHEET_NOT_WRITTEN';
+    default: return 'BRIDGE_REMOTE_ERROR';
+  }
+}
+
 export type BridgeAction = 'ledger.append' | 'ledger.receipt';
 export function canonicalLedger(p: LedgerPayload): string { return JSON.stringify({ id: p.id, date: p.date, type: p.type, category: p.category, amountCents: p.amountCents, account: p.account, content: p.content, note: p.note, counterpartyAccount: p.counterpartyAccount, recordedAt: p.recordedAt }); }
 export function canonicalMessage(timestamp: number, requestId: string, action: BridgeAction, payload: LedgerPayload): string { return `${timestamp}\n${requestId}\n${action}\n${canonicalLedger(payload)}`; }
@@ -40,6 +52,7 @@ export async function callBridge(env: Env, action: BridgeAction, payload: Ledger
   let result: unknown;
   try { result = await response.json(); }
   catch { throw new BridgeError('BRIDGE_JSON_ERROR'); }
-  // Remote error strings and response context are never forwarded.
-  if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) throw new BridgeError('BRIDGE_REMOTE_ERROR');
+  // Map exact allowlisted values; never forward remote response context.
+  if (!result || typeof result !== 'object') throw new BridgeError('BRIDGE_REMOTE_ERROR');
+  if ((result as { ok?: unknown }).ok !== true) throw new BridgeError(remoteFailureCode((result as { error?: unknown }).error));
 }
