@@ -6,6 +6,7 @@ import { ledgerRow, validateLedgerPayload } from '../functions/_lib/ledger.ts';
 import { base64url } from '../functions/_lib/security.ts';
 import { onRequestPost as login } from '../functions/api/auth/login.ts';
 import { onRequestPost as logout } from '../functions/api/auth/logout.ts';
+import { onRequestGet as health } from '../functions/api/health.ts';
 import { onRequestPost as writeLedger } from '../functions/api/ledger.ts';
 import type { Env, KVNamespaceLike, StoredSession } from '../functions/_lib/types.ts';
 
@@ -202,4 +203,63 @@ test('failed append retries with the same id; income, expense and transfer keep 
       assert.equal(kv.data.get(`ledger:${p.id}`), 'complete');
     } finally { st.mock.restoreAll(); }
   });
+});
+
+class RateLimitedKV extends MemoryKV {
+  lastWrite = new Map<string, number>();
+  writes: string[] = [];
+  mutate(key: string) {
+    const now = Date.now();
+    if (now - (this.lastWrite.get(key) ?? -Infinity) < 1000) throw new Error('mock per-key write limit');
+    this.lastWrite.set(key, now); this.writes.push(key);
+  }
+  async put(key: string, value: string) { this.mutate(key); await super.put(key, value); }
+  async delete(key: string) { this.mutate(key); await super.delete(key); }
+}
+
+test('fast bridge success writes KV once, and bridge rejection needs no cleanup mutation', async (t) => {
+  for (const p of [payload, transferPayload, { ...payload, type: '收入' as const }]) {
+    const kv = new RateLimitedKV(); const cookie = await putSession(kv); const env = envWith({ DUANOS_KV: kv });
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }));
+    const response = await writeLedger({ request: post('/api/ledger', p, cookie), env });
+    assert.deepEqual(await response.json(), { ok: true, duplicate: false, receiptSent: true });
+    assert.deepEqual(kv.writes.filter(k => k.startsWith('ledger:')), [`ledger:${p.id}`]);
+    assert.equal(kv.data.get(`ledger:${p.id}`), 'complete');
+    t.mock.restoreAll();
+  }
+  const kv = new RateLimitedKV(); const cookie = await putSession(kv); const env = envWith({ DUANOS_KV: kv });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false, error: 'INVALID_SIGNATURE' }));
+  const failed = await writeLedger({ request: post('/api/ledger', transferPayload, cookie), env });
+  assert.deepEqual(await failed.json(), { ok: false, error: 'BRIDGE_REMOTE_INVALID_SIGNATURE' });
+  assert.equal(kv.data.has(`ledger:${transferPayload.id}`), false);
+  assert.deepEqual(kv.writes.filter(k => k.startsWith('ledger:')), []);
+});
+
+test('state reads fail safely before outbound requests; legacy in-progress markers remain honored', async (t) => {
+  const raw = 'https://private.example secret=mock-secret token=mock-token cookie=mock-cookie';
+  for (const phase of ['session', 'ledger']) {
+    const kv = new MemoryKV(); const cookie = await putSession(kv); const env = envWith({ DUANOS_KV: kv });
+    const get = kv.get.bind(kv);
+    t.mock.method(kv, 'get', async (key: string) => { if (key.startsWith(phase + ':')) throw new Error(raw); return get(key); });
+    let outbound = 0; t.mock.method(globalThis, 'fetch', async () => { outbound++; return Response.json({ ok: true }); });
+    const response = await writeLedger({ request: post('/api/ledger', transferPayload, cookie), env });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: phase === 'session' ? 'LEDGER_SESSION_ERROR' : 'LEDGER_STATE_READ_ERROR' });
+    assert.equal(outbound, 0);
+    t.mock.restoreAll();
+  }
+  const kv = new MemoryKV(); const cookie = await putSession(kv); const env = envWith({ DUANOS_KV: kv });
+  await kv.put(`ledger:${transferPayload.id}`, 'processing');
+  let outbound = 0; t.mock.method(globalThis, 'fetch', async () => { outbound++; return Response.json({ ok: true }); });
+  assert.deepEqual(await (await writeLedger({ request: post('/api/ledger', transferPayload, cookie), env })).json(), { ok: false, error: 'IN_PROGRESS' });
+  assert.equal(outbound, 0);
+});
+
+
+test('public health exposes only a fixed ledger protocol revision without reading or writing KV', async (t) => {
+  const kv = new MemoryKV(); let storageCalls = 0;
+  for (const method of ['get', 'put', 'delete'] as const) t.mock.method(kv, method, async () => { storageCalls++; throw new Error('unexpected storage call'); });
+  const response = await health({ request: new Request(origin + '/api/health'), env: envWith({ DUANOS_KV: kv }) });
+  assert.deepEqual(await response.json(), { ok: true, authenticated: false, ledgerProtocol: 2 });
+  assert.equal(storageCalls, 0);
 });

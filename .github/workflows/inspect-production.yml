@@ -1,35 +1,23 @@
-name: Inspect Production without writes
+name: Verify Cloudflare Production without writes
 on:
   push:
-    branches: [work/v0.2.0-sync-failure-fix]
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: duanos-production-verification
+  cancel-in-progress: true
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 6
     steps:
-      - name: Read homepage, public health and static bundles
-        shell: bash
-        run: |
-          node --input-type=module <<'JS'
-          const base = 'https://duanos.pages.dev';
-          async function get(path) {
-            try {
-              const response = await fetch(base + path, {headers: {'Cache-Control': 'no-cache'}, signal: AbortSignal.timeout(20000)});
-              return {status: response.status, type: response.headers.get('content-type'), body: await response.text()};
-            } catch { return {status: 0, type: null, body: ''}; }
-          }
-          const home = await get('/?check=' + Date.now());
-          const paths = [...home.body.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/g)].map(m => m[1]).filter(p => p.startsWith('/') && !p.startsWith('//') && p.endsWith('.js')).slice(0, 5);
-          let js = '';
-          const bundles = [];
-          for (const p of paths) {
-            const r = await get(p + '?check=' + Date.now()); js += r.body;
-            bundles.push({path:p,status:r.status});
-          }
-          const markers = Object.fromEntries(['BRIDGE_FETCH_ERROR','BRIDGE_REMOTE_ERROR','BRIDGE_REMOTE_INVALID_SIGNATURE','BRIDGE_REMOTE_NOT_CONFIGURED','BRIDGE_REMOTE_INVALID_REQUEST','BRIDGE_REMOTE_STALE_REQUEST','BRIDGE_REMOTE_LEDGER_SHEET_NOT_FOUND','BRIDGE_REMOTE_SHEET_NOT_WRITTEN'].map(m => [m,js.includes(m)]));
-          const health = await get('/api/health?check=' + Date.now());
-          let h = {}; try { const p = JSON.parse(health.body); h = {ok:p.ok===true,authenticated:p.authenticated===true}; } catch {}
-          console.log('PRODUCTION_READ_ONLY_RESULT=' + JSON.stringify({homepage:home.status,bundles,markers,health:{status:health.status,type:health.type,...h}}));
-          JS
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Wait for Git integration and read deployed assets/health
+        run: node scripts/inspect-production.mjs

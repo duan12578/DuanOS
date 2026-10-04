@@ -15,7 +15,7 @@
 - 暴力破解：按 Cloudflare IP 与 User-Agent 的 SHA-256 摘要计数，15 分钟内五次失败即临时锁定；响应不提示密码接近程度，也不保存原始 IP。
 - CSRF/CORS：登录、退出和记账 POST 均要求 `Origin` 与请求 URL 同源；未设置跨域允许头。
 - HMAC：签名覆盖 timestamp、稳定 requestId、action 和固定字段顺序的完整 payload；Apps Script constant-time 验签并拒绝超过五分钟的请求、未知 action 和无效 payload。错误响应不包含 Secret 或请求正文。
-- 幂等：Cloudflare KV 与 Apps Script Script Properties 双层记录 `sheet_written` / `complete`。写表确认后才发邮件；邮件失败只重试 `ledger.receipt`。Apps Script 使用脚本锁保护同一阶段，Cloudflare 超时后再次调用 append 也不会新增第二行。
+- 幂等：Cloudflare KV 缓存最终状态；Apps Script Script Properties 权威记录 `sheet_written` / `complete`。写表确认后才发邮件；KV 已确认写表时，邮件失败只重试 `ledger.receipt`；缓存缺失时会先调用幂等 append，再重试回执。Apps Script 使用脚本锁保护同一阶段，Cloudflare 超时后再次调用 append 也不会新增第二行。
 - 本地保护：同步发生在本地持久化之后；错误只修改同步状态，不删除或覆盖本地业务字段。
 - 日志：Cloudflare 不记录口令、Hash、Cookie、共享 Secret 或 payload。Apps Script 只记录固定内部错误消息，不记录签名、正文或 Script Properties。
 
@@ -26,3 +26,5 @@
 - Apps Script Script Properties 有配额，不适合无限增长。未来需要保留清理策略，但在不能证明远端重试窗口结束前不得删除幂等状态。
 - Apps Script Web App、Script Properties 与 Cloudflare Production 已正式配置，Apps Script bridge 已进入真实联调；当前仅阻塞于 Owner Auth 的 Cloudflare PBKDF2 兼容性，本 PR 修复该问题。Web App 为了接受 Cloudflare 服务端请求需要允许匿名 HTTP 访问，因此 URL 不是认证边界；安全性依赖高熵共享 Secret、HMAC 验签、时间窗和幂等校验。
 - 本地记录未额外加密；清除 Safari 网站数据仍会删除本地记录。
+
+- KV 每次同步最多写入一次最终状态，避免同一键连续写入触发限速。Bridge append 失败不写入也不清理 KV；写表与回执均由 Apps Script 确认后，即使 KV 缓存更新失败也保留远端成功结果。缓存缺失时仍复用同一 requestId，Apps Script 锁与状态防止重写或重复发信。

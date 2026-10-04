@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import App from '../App';
 import { cancel, schedule } from '../src/notifications';
 import { makeEntry, recognize } from '../src/domain';
-import { bridgeErrorCodes } from '../src/sync-errors';
+import { cloudErrorCodes, bridgeErrorCodes } from '../src/sync-errors';
 
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ ok: true, authenticated: false }) })) as jest.Mock; });
 async function openInput(text: string) {
@@ -125,11 +125,11 @@ test('corrupt stored data keeps the input entry disabled', async () => {
   expect(AsyncStorage.setItem).not.toHaveBeenCalled();
 });
 
-test.each([...bridgeErrorCodes, 'unsafe response', 'unsafe fetch exception'])('retry displays and preserves a safe diagnostic: %s', async (failure) => {
+test.each([...bridgeErrorCodes, ...cloudErrorCodes, 'unsafe response', 'unsafe fetch exception', 'HTML HTTP failure', 'HTML success response'])('retry displays and preserves a safe diagnostic: %s', async (failure) => {
   const originalOS = Platform.OS; Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
   const entry = makeEntry(recognize('工资卡转入微信钱包10元'), 'existing-transfer-123');
   const raw = 'https://private.example secret=private-secret signature=private-signature Cookie=private-cookie password=private-password token=private-token';
-  const code = failure.startsWith('unsafe') ? 'SYNC_FAILED' : failure;
+  const code = failure === 'unsafe fetch exception' ? 'CLOUD_FETCH_ERROR' : failure === 'unsafe response' ? 'SYNC_FAILED' : failure === 'HTML HTTP failure' ? 'CLOUD_HTTP_ERROR' : failure === 'HTML success response' ? 'CLOUD_JSON_ERROR' : failure;
   await AsyncStorage.setItem('duanos:entries:v1', JSON.stringify([entry]));
   let ledgerCalls = 0;
   global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -139,6 +139,7 @@ test.each([...bridgeErrorCodes, 'unsafe response', 'unsafe fetch exception'])('r
     ledgerCalls++;
     if (ledgerCalls > 1) return { ok: true, json: async () => ({ ok: true, receiptSent: true }) };
     if (failure === 'unsafe fetch exception') throw new Error(raw);
+    if (failure.startsWith('HTML')) return { ok: failure === 'HTML success response', json: async () => { throw new Error(raw); } };
     return { ok: false, json: async () => ({ ok: false, error: failure === 'unsafe response' ? raw : failure, context: raw, stack: raw }) };
   }) as jest.Mock;
   try {

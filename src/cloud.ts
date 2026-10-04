@@ -38,8 +38,19 @@ export async function fetchCloudStatus(): Promise<CloudStatus> {
 }
 
 export async function syncLedgerEntry(entry: Entry): Promise<{ receiptSent: boolean }> {
-  const response = await fetch('/api/ledger', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(ledgerPayload(entry)) });
-  const result = await response.json().catch(() => ({})) as { ok?: boolean; receiptSent?: boolean; error?: unknown } | null;
-  if (!response.ok || !result?.ok) throw new Error(safeSyncErrorCode(result?.error));
+  // Build/validate before fetch so malformed local records retain their own code.
+  const payload = ledgerPayload(entry);
+  let response: Response;
+  try { response = await fetch('/api/ledger', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) }); }
+  catch { throw new Error('CLOUD_FETCH_ERROR'); }
+  let result: { ok?: unknown; receiptSent?: unknown; error?: unknown } | null;
+  try { result = await response.json(); }
+  catch { throw new Error(response.ok ? 'CLOUD_JSON_ERROR' : 'CLOUD_HTTP_ERROR'); }
+  if (!response.ok || result?.ok !== true) {
+    const code = result?.error === undefined
+      ? (response.ok ? 'CLOUD_RESPONSE_ERROR' : 'CLOUD_HTTP_ERROR')
+      : safeSyncErrorCode(result.error);
+    throw new Error(code);
+  }
   return { receiptSent: result.receiptSent !== false };
 }

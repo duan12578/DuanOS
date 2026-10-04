@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ledgerPayload, syncLedgerEntry } from '../src/cloud.ts';
 import { pendingSyncCount, updateSync } from '../src/sync.ts';
 import { decodeEntries, makeEntry, recognize } from '../src/domain.ts';
-import { bridgeErrorCodes, safeSyncErrorCode, syncErrorLabel } from '../src/sync-errors.ts';
+import { bridgeErrorCodes, cloudErrorCodes, safeSyncErrorCode, syncErrorLabel } from '../src/sync-errors.ts';
 
 const now = new Date('2026-09-13T00:00:00Z');
 test('ledger payload keeps the stable local id and positive cents', () => {
@@ -29,7 +29,7 @@ test('sync transitions preserve the local record and expose pending count', () =
 test('cloud keeps only allowlisted codes through persistence and display', async (t) => {
   const entry = makeEntry(recognize('工资卡转入微信钱包10元', now), 'transfer-id-123', now);
   const raw = 'https://private.example secret=private-secret signature=private-signature Cookie=private-cookie password=private-password token=private-token';
-  for (const code of [...bridgeErrorCodes, 'UNAUTHENTICATED', 'IN_PROGRESS']) {
+  for (const code of [...bridgeErrorCodes, ...cloudErrorCodes, 'UNAUTHENTICATED', 'IN_PROGRESS']) {
     t.mock.method(globalThis, 'fetch', async () => Response.json({ ok: false, error: code, context: raw }, { status: 502 }));
     await assert.rejects(syncLedgerEntry(entry), { message: code });
     const stored = decodeEntries(JSON.stringify(updateSync([entry], entry.id, 'error', code)));
@@ -45,7 +45,7 @@ test('cloud keeps only allowlisted codes through persistence and display', async
     t.mock.restoreAll();
   }
   t.mock.method(globalThis, 'fetch', async () => Response.json(null, { status: 502 }));
-  await assert.rejects(syncLedgerEntry(entry), { message: 'SYNC_FAILED' });
+  await assert.rejects(syncLedgerEntry(entry), { message: 'CLOUD_HTTP_ERROR' });
 });
 
 test('cloud success and receipt retry results are unchanged', async (t) => {
@@ -56,4 +56,27 @@ test('cloud success and receipt retry results are unchanged', async (t) => {
     t.mock.restoreAll();
   }
   assert.equal(syncErrorLabel('表格已同步，回执邮件待重试'), '同步失败 · 表格已同步，回执邮件待重试');
+});
+
+
+test('cloud distinguishes transport, HTML/HTTP and invalid success responses without leaking context', async (t) => {
+  const entry = makeEntry(recognize('工资卡转入微信钱包10元', now), 'transfer-id-123', now);
+  const raw = 'https://private.example secret=mock-secret signature=mock-signature cookie=mock-cookie token=mock-token';
+  const cases = [
+    { fetch: async () => { throw new Error(raw); }, code: 'CLOUD_FETCH_ERROR' },
+    { fetch: async () => new Response(raw, { status: 500 }), code: 'CLOUD_HTTP_ERROR' },
+    { fetch: async () => new Response(raw, { status: 200 }), code: 'CLOUD_JSON_ERROR' },
+    { fetch: async () => Response.json({ ok: false }, { status: 503 }), code: 'CLOUD_HTTP_ERROR' },
+    ...[null, {}, [], 1, 'unsafe text', { ok: 'true' }].map(value => ({ fetch: async () => Response.json(value), code: 'CLOUD_RESPONSE_ERROR' })),
+    { fetch: async () => Response.json({ ok: false, error: 'BRIDGE_REMOTE_INVALID_SIGNATURE', stack: raw }, { status: 502 }), code: 'BRIDGE_REMOTE_INVALID_SIGNATURE' },
+  ];
+  for (const c of cases) {
+    t.mock.method(globalThis, 'fetch', c.fetch);
+    await assert.rejects(syncLedgerEntry(entry), { message: c.code });
+    t.mock.restoreAll();
+  }
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({ ok: true }); });
+  await assert.rejects(syncLedgerEntry({ ...entry, account: '' }), { message: 'INVALID_LEDGER_ENTRY' });
+  assert.equal(calls, 0);
 });
