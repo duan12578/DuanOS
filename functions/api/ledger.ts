@@ -1,4 +1,4 @@
-import { callBridge } from '../_lib/bridge.ts';
+import { bridgeFailureCode, callBridge } from '../_lib/bridge.ts';
 import { validateLedgerPayload } from '../_lib/ledger.ts';
 import { json, sameOrigin, sessionFor } from '../_lib/security.ts';
 import type { PagesHandler } from '../_lib/types.ts';
@@ -20,5 +20,5 @@ export const onRequestPost: PagesHandler = async ({ request, env }) => {
     await callBridge(env, 'ledger.append', payload); await env.DUANOS_KV.put(key, 'sheet_written', { expirationTtl: YEAR });
     try { await callBridge(env, 'ledger.receipt', payload); await env.DUANOS_KV.put(key, 'complete', { expirationTtl: YEAR }); return json({ ok: true, duplicate: false, receiptSent: true }); }
     catch { return json({ ok: true, duplicate: false, receiptSent: false, error: 'RECEIPT_FAILED' }, 202); }
-  } catch { await env.DUANOS_KV.delete(key); return json({ ok: false, error: 'SYNC_FAILED' }, 502); }
+  } catch (failure) { await env.DUANOS_KV.delete(key); return json({ ok: false, error: bridgeFailureCode(failure) }, 502); }
 };
