@@ -151,3 +151,35 @@ test('repository manifest preserves existing Web App identity/access and OAuth s
   assert.deepEqual(manifest.webapp, { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' });
   assert.deepEqual(manifest.oauthScopes, ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/script.send_mail']);
 });
+
+test('lost KV writes and concurrent retries never repeat remote append/mail or hide a confirmed outcome', async (t) => {
+  for (const p of samples) await t.test(p.type, async st => {
+    const remote = script({ mailFailsOnce: true });
+    const sessionId = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN';
+    const logs: unknown[][] = []; const actions: string[] = [];
+    const env: Env = {
+      DUANOS_KV: {
+        async get(key) { return key.startsWith('session:') ? JSON.stringify({ createdAt: Date.now(), expiresAt: Date.now() + 3600_000 }) : null; },
+        async put() { throw new Error(sensitive); },
+        async delete() { throw new Error('unexpected cleanup'); },
+      },
+      APPS_SCRIPT_SHARED_SECRET: secret, APPS_SCRIPT_WEB_APP_URL: 'https://script.google.com/macros/s/mock-only/exec', DUANOS_OWNER_PASSWORD_HASH: '',
+    };
+    st.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args); });
+    st.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => { const body = JSON.parse(String(init?.body)); actions.push(body.action); return Response.json(remote.post(body)); });
+    const api = () => writeLedger({ env, request: new Request('https://mock.example/api/ledger', { method: 'POST', headers: { Origin: 'https://mock.example', Cookie: '__Host-duanos_session=' + sessionId }, body: JSON.stringify(p) }) });
+    try {
+      const pending = await api(); assert.equal(pending.status, 202);
+      assert.deepEqual(await pending.json(), { ok: true, duplicate: false, receiptSent: false, error: 'RECEIPT_FAILED' });
+      assert.equal(remote.rows.length, 1); assert.equal(remote.mails.length, 0);
+      for (const response of await Promise.all([api(), api()])) {
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { ok: true, duplicate: false, receiptSent: true });
+      }
+      assert.equal(remote.rows.length, 1); assert.equal(remote.mails.length, 1);
+      assert.equal(remote.properties.get('ledger:' + p.id), 'complete');
+      assert.deepEqual(actions, ['ledger.append', 'ledger.receipt', 'ledger.append', 'ledger.append', 'ledger.receipt', 'ledger.receipt']);
+      assert.deepEqual(logs, Array.from({ length: 3 }, () => ['LEDGER_STATE_WRITE_ERROR']));
+    } finally { st.mock.restoreAll(); }
+  });
+});

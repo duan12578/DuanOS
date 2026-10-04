@@ -8,8 +8,13 @@ export const bridgeErrorCodes = [
 ] as const;
 export type BridgeErrorCode = typeof bridgeErrorCodes[number];
 
+export const cloudErrorCodes = [
+  'CLOUD_FETCH_ERROR', 'CLOUD_HTTP_ERROR', 'CLOUD_JSON_ERROR', 'CLOUD_RESPONSE_ERROR',
+  'LEDGER_SESSION_ERROR', 'LEDGER_STATE_READ_ERROR',
+] as const;
+
 const syncErrorCodes: readonly string[] = [
-  ...bridgeErrorCodes, 'SYNC_FAILED', 'ORIGIN_REJECTED', 'UNAUTHENTICATED',
+  ...bridgeErrorCodes, ...cloudErrorCodes, 'SYNC_FAILED', 'ORIGIN_REJECTED', 'UNAUTHENTICATED',
   'INVALID_PAYLOAD', 'INVALID_LEDGER_ENTRY', 'IN_PROGRESS',
 ];
 export function safeSyncErrorCode(value: unknown): string {
