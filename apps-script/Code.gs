@@ -1,6 +1,11 @@
 const LEDGER_SHEET = '记账流水';
 const ALLOWED_ACTIONS = ['ledger.append', 'ledger.receipt'];
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const SAFE_ERROR_CODES = ['NOT_CONFIGURED', 'STALE_REQUEST', 'INVALID_REQUEST', 'INVALID_SIGNATURE', 'LEDGER_SHEET_NOT_FOUND', 'SHEET_NOT_WRITTEN'];
+
+function safeErrorCode_(error) {
+  return error && typeof error.message === 'string' && SAFE_ERROR_CODES.indexOf(error.message) >= 0 ? error.message : 'BRIDGE_REQUEST_FAILED';
+}
 
 function output_(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
@@ -79,7 +84,8 @@ function doPost(e) {
       return output_({ ok: true, duplicate: false });
     } finally { lock.releaseLock(); }
   } catch (error) {
-    console.error('Bridge request failed: %s', error && error.message ? error.message : 'UNKNOWN');
-    return output_({ ok: false, error: 'BRIDGE_REQUEST_FAILED' });
+    var code = safeErrorCode_(error);
+    console.error('Bridge request failed: %s', code);
+    return output_({ ok: false, error: code });
   }
 }
