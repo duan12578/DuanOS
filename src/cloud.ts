@@ -1,4 +1,5 @@
 import type { Entry } from './domain';
+import { safeSyncErrorCode } from './sync-errors.ts';
 
 export type CloudStatus = { ok: boolean; authenticated: boolean };
 
@@ -38,7 +39,7 @@ export async function fetchCloudStatus(): Promise<CloudStatus> {
 
 export async function syncLedgerEntry(entry: Entry): Promise<{ receiptSent: boolean }> {
   const response = await fetch('/api/ledger', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(ledgerPayload(entry)) });
-  const result = await response.json().catch(() => ({})) as { ok?: boolean; receiptSent?: boolean; error?: string };
-  if (!response.ok || !result.ok) throw new Error(result.error || 'SYNC_FAILED');
+  const result = await response.json().catch(() => ({})) as { ok?: boolean; receiptSent?: boolean; error?: unknown } | null;
+  if (!response.ok || !result?.ok) throw new Error(safeSyncErrorCode(result?.error));
   return { receiptSent: result.receiptSent !== false };
 }

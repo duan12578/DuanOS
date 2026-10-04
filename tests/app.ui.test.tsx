@@ -4,6 +4,8 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import App from '../App';
 import { cancel, schedule } from '../src/notifications';
+import { makeEntry, recognize } from '../src/domain';
+import { bridgeErrorCodes } from '../src/sync-errors';
 
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ ok: true, authenticated: false }) })) as jest.Mock; });
 async function openInput(text: string) {
@@ -121,4 +123,49 @@ test('corrupt stored data keeps the input entry disabled', async () => {
   await screen.findByText(/无法读取本地记录/);
   expect(screen.getByLabelText('统一输入入口')).toBeDisabled();
   expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+});
+
+test.each([...bridgeErrorCodes, 'unsafe response', 'unsafe fetch exception'])('retry displays and preserves a safe diagnostic: %s', async (failure) => {
+  const originalOS = Platform.OS; Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+  const entry = makeEntry(recognize('工资卡转入微信钱包10元'), 'existing-transfer-123');
+  const raw = 'https://private.example secret=private-secret signature=private-signature Cookie=private-cookie password=private-password token=private-token';
+  const code = failure.startsWith('unsafe') ? 'SYNC_FAILED' : failure;
+  await AsyncStorage.setItem('duanos:entries:v1', JSON.stringify([entry]));
+  let ledgerCalls = 0;
+  global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/health') return { ok: true, json: async () => ({ ok: true, authenticated: true }) };
+    expect(String(input)).toBe('/api/ledger');
+    expect(JSON.parse(String(init?.body))).toMatchObject({ id: entry.id, type: '转账', amountCents: 1000, account: '工资卡', counterpartyAccount: '微信零钱' });
+    ledgerCalls++;
+    if (ledgerCalls > 1) return { ok: true, json: async () => ({ ok: true, receiptSent: true }) };
+    if (failure === 'unsafe fetch exception') throw new Error(raw);
+    return { ok: false, json: async () => ({ ok: false, error: failure === 'unsafe response' ? raw : failure, context: raw, stack: raw }) };
+  }) as jest.Mock;
+  try {
+    let app = render(<App />);
+    fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
+    fireEvent.press(await screen.findByText('重试同步'));
+    await screen.findByText(`同步失败（${code}）`);
+    expect(screen.getByText(`云同步失败（${code}），本地记录已保留，可在工作台重试`)).toBeTruthy();
+    const stored = (await AsyncStorage.getItem('duanos:entries:v1'))!;
+    expect(JSON.parse(stored)).toEqual([{ ...entry, syncState: 'error', syncError: code }]);
+    expect(stored).not.toContain(raw);
+    expect(screen.queryByText(/private-secret|private-signature|private-cookie|private-password|private-token|private\.example/)).toBeNull();
+    app.unmount(); app = render(<App />);
+    fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
+    await screen.findByText(`同步失败（${code}）`);
+    fireEvent.press(await screen.findByText('重试同步'));
+    await screen.findByText('已同步到 Google Sheets');
+    expect(ledgerCalls).toBe(2);
+    expect(JSON.parse((await AsyncStorage.getItem('duanos:entries:v1'))!)).toEqual([{ ...entry, syncState: 'synced' }]);
+    app.unmount();
+  } finally { Object.defineProperty(Platform, 'OS', { configurable: true, value: originalOS }); }
+});
+
+test('stored untrusted error text is not rendered', async () => {
+  const entry = makeEntry(recognize('微信支付午饭25元'), 'existing-expense-123');
+  await AsyncStorage.setItem('duanos:entries:v1', JSON.stringify([{ ...entry, syncState: 'error', syncError: 'https://private.example token=private-token' }]));
+  render(<App />); fireEvent.press(screen.getByRole('tab', { name: '工作台' }));
+  await screen.findByText('同步失败（SYNC_FAILED）');
+  expect(screen.queryByText(/private\.example|private-token/)).toBeNull();
 });

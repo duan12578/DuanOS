@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { canonicalMessage, signBridge } from '../functions/_lib/bridge.ts';
+import { bridgeFailureCode, callBridge, canonicalMessage, signBridge } from '../functions/_lib/bridge.ts';
 import { ledgerRow, validateLedgerPayload } from '../functions/_lib/ledger.ts';
 import { base64url } from '../functions/_lib/security.ts';
 import { onRequestPost as login } from '../functions/api/auth/login.ts';
@@ -115,4 +115,89 @@ test('Apps Script accepts transfer structure and formats a clear transfer receip
 test('Apps Script source contains no real configuration', async () => {
   const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8'));
   assert.match(source, /INVALID_SIGNATURE/); assert.match(source, /ALLOWED_ACTIONS/); assert.doesNotMatch(source, /@gmail\.com|docs\.google\.com\/spreadsheets/);
+});
+
+test('bridge stages survive the ledger API without exposing sensitive context', async (t) => {
+  const sensitive = ['https://script.google.com/macros/s/private-deployment/exec', 'private-shared-secret-at-least-32-characters', 'private-signature', 'private-cookie', 'private-owner-password', 'private-oauth-token'];
+  const raw = sensitive.join(' ');
+  const cases = [
+    { name: 'missing URL', overrides: { APPS_SCRIPT_WEB_APP_URL: undefined }, code: 'BRIDGE_CONFIG_ERROR' },
+    ...['', 'not-a-url', 'http://script.google.com/macros/s/test/exec', 'https://evil.example/macros/s/test/exec', 'https://script.google.com/macros/s/test/dev'].map(url => ({ name: `invalid URL ${url}`, overrides: { APPS_SCRIPT_WEB_APP_URL: url }, code: 'BRIDGE_CONFIG_ERROR' })),
+    { name: 'missing secret', overrides: { APPS_SCRIPT_SHARED_SECRET: undefined }, code: 'BRIDGE_CONFIG_ERROR' },
+    { name: 'short secret', overrides: { APPS_SCRIPT_SHARED_SECRET: 'short' }, code: 'BRIDGE_CONFIG_ERROR' },
+    { name: 'signing fails', signFails: true, code: 'BRIDGE_SIGN_ERROR' },
+    { name: 'fetch throws', fetchFails: true, code: 'BRIDGE_FETCH_ERROR' },
+    { name: 'HTTP 503 with non-JSON body', response: () => new Response(raw, { status: 503 }), code: 'BRIDGE_HTTP_ERROR' },
+    { name: 'HTTP 403 with JSON rejection', response: () => Response.json({ ok: false, error: raw }, { status: 403 }), code: 'BRIDGE_HTTP_ERROR' },
+    { name: 'non-JSON response', response: () => new Response(raw), code: 'BRIDGE_JSON_ERROR' },
+    ...['INVALID_SIGNATURE', 'INVALID_REQUEST', 'STALE_REQUEST', 'NOT_CONFIGURED', 'LEDGER_SHEET_NOT_FOUND', 'BRIDGE_REQUEST_FAILED', raw].map(error => ({ name: `remote ${error.split(' ')[0]}`, response: () => Response.json({ ok: false, error, context: raw, stack: raw }), code: 'BRIDGE_REMOTE_ERROR' })),
+    ...[null, {}, [], { ok: 'true' }].map((value, i) => ({ name: `invalid result shape ${i}`, response: () => Response.json(value), code: 'BRIDGE_REMOTE_ERROR' })),
+  ];
+  for (const scenario of cases) await t.test(scenario.name, async (st) => {
+    const kv = new MemoryKV(); const cookie = await putSession(kv);
+    const env = envWith({ DUANOS_KV: kv, APPS_SCRIPT_WEB_APP_URL: sensitive[0], APPS_SCRIPT_SHARED_SECRET: sensitive[1], DUANOS_OWNER_PASSWORD_HASH: sensitive[4], ...('overrides' in scenario ? scenario.overrides : {}) });
+    let fetched = false;
+    st.mock.method(globalThis, 'fetch', async () => {
+      fetched = true;
+      if ('fetchFails' in scenario) throw new Error(raw);
+      return 'response' in scenario && scenario.response ? scenario.response() : Response.json({ ok: true });
+    });
+    if ('signFails' in scenario) st.mock.method(crypto.subtle, 'importKey', async () => { throw new Error(raw); });
+    try {
+      await assert.rejects(callBridge(env, 'ledger.append', payload), error => {
+        assert.equal(bridgeFailureCode(error), scenario.code);
+        assert.equal((error as Error).message, scenario.code);
+        assert.equal((error as Error & { cause?: unknown }).cause, undefined);
+        return true;
+      });
+      const response = await writeLedger({ request: post('/api/ledger', payload, cookie, { Authorization: `Bearer ${sensitive[5]}` }), env });
+      assert.equal(response.status, 502);
+      const body = await response.text();
+      assert.deepEqual(JSON.parse(body), { ok: false, error: scenario.code });
+      for (const value of [...sensitive, cookie]) assert.equal(body.includes(value), false);
+      assert.equal(kv.data.has(`ledger:${payload.id}`), false);
+      assert.equal(fetched, !('overrides' in scenario || 'signFails' in scenario));
+    } finally { st.mock.restoreAll(); }
+  });
+  assert.equal(bridgeFailureCode(new Error(raw)), 'SYNC_FAILED');
+  assert.equal(bridgeFailureCode(new Error('BRIDGE_FETCH_ERROR')), 'SYNC_FAILED');
+});
+
+test('bridge success keeps signed request and redirect behavior', async (t) => {
+  const env = envWith();
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(input, env.APPS_SCRIPT_WEB_APP_URL);
+    assert.equal(init?.method, 'POST'); assert.equal(init?.redirect, 'follow');
+    assert.deepEqual(init?.headers, { 'Content-Type': 'text/plain;charset=utf-8' });
+    const request = JSON.parse(String(init?.body));
+    assert.equal(request.requestId, payload.id); assert.equal(request.action, 'ledger.append');
+    assert.deepEqual(request.payload, payload);
+    assert.equal(request.signature, await signBridge(env.APPS_SCRIPT_SHARED_SECRET, canonicalMessage(request.timestamp, payload.id, request.action, payload)));
+    return Response.json({ ok: true, duplicate: false });
+  });
+  await callBridge(env, 'ledger.append', payload);
+});
+
+test('failed append retries with the same id; income, expense and transfer keep idempotency', async (t) => {
+  for (const p of [payload, { ...payload, type: '收入' as const }, transferPayload]) await t.test(p.type, async (st) => {
+    const kv = new MemoryKV(); const cookie = await putSession(kv); const env = envWith({ DUANOS_KV: kv });
+    const requests: Array<{ action: string; requestId: string; payload: typeof p }> = [];
+    st.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: requests.length > 1 });
+    });
+    try {
+      const failed = await writeLedger({ request: post('/api/ledger', p, cookie), env });
+      assert.deepEqual(await failed.json(), { ok: false, error: 'BRIDGE_REMOTE_ERROR' });
+      assert.equal(kv.data.has(`ledger:${p.id}`), false);
+      const success = await writeLedger({ request: post('/api/ledger', p, cookie), env });
+      assert.equal(success.status, 200); assert.deepEqual(await success.json(), { ok: true, duplicate: false, receiptSent: true });
+      const duplicate = await writeLedger({ request: post('/api/ledger', p, cookie), env });
+      assert.deepEqual(await duplicate.json(), { ok: true, duplicate: true, receiptSent: true });
+      assert.deepEqual(requests.map(r => r.action), ['ledger.append', 'ledger.append', 'ledger.receipt']);
+      assert.equal(requests.every(r => r.requestId === p.id), true);
+      assert.equal(requests.every(r => JSON.stringify(r.payload) === JSON.stringify(p)), true);
+      assert.equal(kv.data.get(`ledger:${p.id}`), 'complete');
+    } finally { st.mock.restoreAll(); }
+  });
 });

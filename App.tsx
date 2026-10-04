@@ -9,6 +9,7 @@ import type { Draft, Entry, Kind } from './src/domain';
 import { cancel, schedule } from './src/notifications';
 import { fetchCloudStatus, loginOwner, logoutOwner, syncLedgerEntry, type CloudStatus } from './src/cloud';
 import { pendingSyncCount, updateSync } from './src/sync';
+import { receiptPendingMessage, safeSyncErrorCode, syncErrorLabel } from './src/sync-errors';
 
 const KEY = 'duanos:entries:v1';
 const C = { bg: '#F5F6FA', ink: '#19243C', muted: '#6F788B', accent: '#5555D9', pale: '#EEEEFF', line: '#E7EAF1', green: '#247B68' };
@@ -64,11 +65,12 @@ function DuanOS() {
     try {
       const result = await syncLedgerEntry({ ...entry, syncState: 'syncing' });
       const state = result.receiptSent ? 'synced' as const : 'error' as const;
-      await persist(updateSync(syncing, entry.id, state, result.receiptSent ? undefined : '表格已同步，回执邮件待重试'));
+      await persist(updateSync(syncing, entry.id, state, result.receiptSent ? undefined : receiptPendingMessage));
       setMessage(result.receiptSent ? '记账已同步，Gmail 回执已发送' : '表格已同步，Gmail 回执发送失败，可安全重试');
-    } catch {
-      await persist(updateSync(syncing, entry.id, 'error', '同步失败，本地记录已保留'));
-      setMessage('云同步失败，本地记录已保留，可在工作台重试');
+    } catch (failure) {
+      const code = safeSyncErrorCode(failure instanceof Error ? failure.message : undefined);
+      await persist(updateSync(syncing, entry.id, 'error', code));
+      setMessage(`云同步失败（${code}），本地记录已保留，可在工作台重试`);
     }
   };
   const start = (kind?: Kind) => { setRaw(kind ? examples[kind] : ''); setDraft(null); setError(''); setOpen(true); };
@@ -134,7 +136,7 @@ function DuanOS() {
     <View style={[s.iconBox, { backgroundColor: e.kind === 'review' ? '#FFF3E6' : C.pale }]}><Ionicons name={icons[e.kind]} size={22} color={C.accent} /></View>
     <View style={{ flex: 1, gap: 6 }}><Text style={[s.body, e.done && { textDecorationLine: 'line-through', color: C.muted }]}>{e.text}</Text><Text style={s.caption}>{labels[e.kind]} · {e.date}{e.account ? ` · ${e.account}${e.direction === 'transfer' && e.counterpartyAccount ? ` → ${e.counterpartyAccount}` : ''}` : ''}</Text>
       {e.kind === 'reminder' && <Text style={s.caption}>{timeLabel(e.dueAt!)} 北京时间 · {e.done ? '已完成' : e.notificationState === 'scheduled' ? '已安排通知' : '通知未安排'}</Text>}
-      {e.kind === 'ledger' && <Text style={s.caption}>{e.syncState === 'synced' ? '已同步到 Google Sheets' : e.syncState === 'syncing' ? '正在同步' : e.syncState === 'error' ? `同步失败${e.syncError ? ` · ${e.syncError}` : ''}` : '待同步'}</Text>}
+      {e.kind === 'ledger' && <Text style={s.caption}>{e.syncState === 'synced' ? '已同步到 Google Sheets' : e.syncState === 'syncing' ? '正在同步' : e.syncState === 'error' ? syncErrorLabel(e.syncError) : '待同步'}</Text>}
       <View style={s.row}>{(e.kind === 'todo' || e.kind === 'reminder') && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void mutate(e, 'complete')} style={s.smallAction}><Text style={s.link}>{e.done ? '恢复待办' : '标记完成'}</Text></Pressable>}
       {e.kind === 'reminder' && !e.done && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void mutate(e, 'retry')} style={s.smallAction}><Text style={s.link}>重试通知</Text></Pressable>}
       {e.kind === 'ledger' && e.syncState !== 'synced' && cloud.authenticated && <Pressable accessibilityRole="button" disabled={busy || e.syncState === 'syncing'} onPress={() => void syncOne(e)} style={s.smallAction}><Text style={s.link}>重试同步</Text></Pressable>}
